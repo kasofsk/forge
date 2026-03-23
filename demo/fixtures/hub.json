@@ -1,0 +1,82 @@
+{
+  "name": "hub",
+  "description": "Wagon-wheel: one central hub job with independent workstreams radiating outward.",
+  "jobs": [
+    {
+      "id": "hub",
+      "title": "Core architecture review",
+      "body": "Central decision gate — all workstreams depend on this.",
+      "labels": ["priority:95"]
+    },
+    {
+      "id": "auth-impl",
+      "title": "[Auth] Implement auth middleware",
+      "body": "JWT validation, refresh logic, role extraction.",
+      "labels": ["priority:70"],
+      "depends_on": ["hub"]
+    },
+    {
+      "id": "auth-tests",
+      "title": "[Auth] Auth integration tests",
+      "body": "Token issuance, expiry, revocation, RBAC boundary tests.",
+      "labels": ["priority:60"],
+      "depends_on": ["auth-impl"]
+    },
+    {
+      "id": "infra-terraform",
+      "title": "[Infra] Write Terraform modules",
+      "body": "Codify the architecture plan as reusable Terraform modules.",
+      "labels": ["priority:65"],
+      "depends_on": ["hub"]
+    },
+    {
+      "id": "infra-ci",
+      "title": "[Infra] Set up CI pipeline",
+      "body": "Forgejo CI: lint, plan, apply on merge.",
+      "labels": ["priority:60"],
+      "depends_on": ["infra-terraform"]
+    },
+    {
+      "id": "fe-components",
+      "title": "[Frontend] Build component library",
+      "body": "Reusable React components matching wireframes.",
+      "labels": ["priority:50"],
+      "depends_on": ["hub"]
+    },
+    {
+      "id": "fe-integration",
+      "title": "[Frontend] Wire frontend to API",
+      "body": "Connect component library to REST endpoints.",
+      "labels": ["priority:55"],
+      "depends_on": ["fe-components"]
+    },
+    {
+      "id": "data-migrations",
+      "title": "[Data] Write DB migrations",
+      "body": "Alembic migration scripts for the core model.",
+      "labels": ["priority:75"],
+      "depends_on": ["hub"]
+    },
+    {
+      "id": "data-seed",
+      "title": "[Data] Seed data & fixtures",
+      "body": "Dev/staging seed data, factory helpers for tests.",
+      "labels": ["priority:50"],
+      "depends_on": ["data-migrations"]
+    },
+    {
+      "id": "api-endpoints",
+      "title": "[API] Build REST endpoints",
+      "body": "CRUD routes, validation, error handling.",
+      "labels": ["priority:70"],
+      "depends_on": ["hub"]
+    },
+    {
+      "id": "api-docs",
+      "title": "[API] Generate OpenAPI docs",
+      "body": "Auto-generate and publish API documentation.",
+      "labels": ["priority:40"],
+      "depends_on": ["api-endpoints"]
+    }
+  ]
+}

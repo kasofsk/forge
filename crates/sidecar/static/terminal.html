@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terminal</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0a0e17;
+    color: #c8ccd4;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 20px;
+    background: rgba(16, 20, 30, 0.95);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    flex-shrink: 0;
+    min-height: 48px;
+  }
+
+  .header .back {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: rgba(200, 204, 212, 0.6);
+    text-decoration: none;
+    font-size: 13px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    transition: all 0.15s;
+  }
+
+  .header .back:hover {
+    color: #e2e6ed;
+    background: rgba(255,255,255,0.06);
+  }
+
+  .mode-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+  }
+
+  .mode-badge.interactive {
+    background: rgba(249, 115, 22, 0.15);
+    color: #f97316;
+    border: 1px solid rgba(249, 115, 22, 0.3);
+  }
+
+  .mode-badge.peek {
+    background: rgba(139, 92, 246, 0.15);
+    color: #8b5cf6;
+    border: 1px solid rgba(139, 92, 246, 0.3);
+  }
+
+  .job-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: rgba(200, 204, 212, 0.7);
+  }
+
+  .job-info .job-ref {
+    color: #e2e6ed;
+    font-weight: 500;
+  }
+
+  .job-info .worker {
+    color: rgba(200, 204, 212, 0.5);
+  }
+
+  .header-spacer { flex: 1; }
+
+  .header-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: none;
+    border: 1px solid;
+    transition: all 0.15s;
+  }
+
+  .header-action.pop-out {
+    background: rgba(255,255,255,0.04);
+    border-color: rgba(255,255,255,0.1);
+    color: rgba(200, 204, 212, 0.6);
+  }
+
+  .header-action.pop-out:hover {
+    background: rgba(255,255,255,0.08);
+    color: #e2e6ed;
+  }
+
+  .header-action.attach {
+    background: rgba(100, 160, 255, 0.12);
+    border-color: rgba(100, 160, 255, 0.3);
+    color: rgba(100, 160, 255, 0.9);
+  }
+
+  .header-action.attach:hover {
+    background: rgba(100, 160, 255, 0.2);
+  }
+
+  .header-action.detach {
+    background: rgba(255, 160, 60, 0.12);
+    border-color: rgba(255, 160, 60, 0.3);
+    color: rgba(255, 160, 60, 0.9);
+  }
+
+  .header-action.detach:hover {
+    background: rgba(255, 160, 60, 0.2);
+  }
+
+  .header-action:disabled {
+    opacity: 0.4;
+    cursor: wait;
+  }
+
+  .terminal-wrap {
+    flex: 1;
+    padding: 12px;
+    display: flex;
+    min-height: 0;
+  }
+
+  .terminal-frame {
+    flex: 1;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    overflow: hidden;
+    background: #000;
+    box-shadow:
+      0 0 0 1px rgba(0,0,0,0.3),
+      0 8px 32px rgba(0,0,0,0.4),
+      inset 0 0 60px rgba(0,0,0,0.2);
+  }
+
+  .terminal-frame iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    display: block;
+  }
+
+  .loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: rgba(200, 204, 212, 0.4);
+    font-size: 14px;
+  }
+
+  .loading .dot {
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  .loading .dot:nth-child(2) { animation-delay: 0.2s; }
+  .loading .dot:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes pulse {
+    0%, 80%, 100% { opacity: 0.3; }
+    40% { opacity: 1; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <a class="back" href="/graph" title="Back to graph">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+    Graph
+  </a>
+
+  <span style="color:rgba(255,255,255,0.1)">|</span>
+
+  <span id="mode-badge" class="mode-badge"></span>
+
+  <div class="job-info">
+    <span id="job-ref" class="job-ref"></span>
+    <span style="color:rgba(255,255,255,0.15)">·</span>
+    <span id="worker-id" class="worker"></span>
+  </div>
+
+  <div class="header-spacer"></div>
+
+  <button id="mode-toggle" class="header-action" style="display:none"></button>
+
+  <a id="pop-out" class="header-action pop-out" target="_blank" title="Open raw terminal in new tab">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+    Raw
+  </a>
+</div>
+
+<div class="terminal-wrap">
+  <div class="terminal-frame">
+    <div id="loading" class="loading">
+      <span>Connecting</span>
+      <span class="dot">&nbsp;.</span>
+      <span class="dot">&nbsp;.</span>
+      <span class="dot">&nbsp;.</span>
+    </div>
+    <iframe id="terminal" style="display:none" allowfullscreen></iframe>
+  </div>
+</div>
+
+<script>
+(function() {
+  const params = new URLSearchParams(window.location.search);
+  const url = params.get('url') || '';
+  const mode = params.get('mode') || 'peek';
+  const job = params.get('job') || '';
+  const worker = params.get('worker') || '';
+
+  // Update header
+  const badge = document.getElementById('mode-badge');
+  badge.className = 'mode-badge ' + mode;
+  badge.textContent = mode === 'interactive' ? 'Interactive' : 'Peek';
+
+  document.getElementById('job-ref').textContent = job ? '#' + job.split('/').pop() : '';
+  document.getElementById('worker-id').textContent = worker || '';
+
+  document.title = (mode === 'interactive' ? 'Terminal' : 'Peek') + ' — ' + (job || 'session');
+
+  // Pop-out link
+  document.getElementById('pop-out').href = url;
+
+  // Mode toggle button (Attach in peek, Detach in interactive)
+  var toggleBtn = document.getElementById('mode-toggle');
+  if (worker) {
+    toggleBtn.style.display = '';
+    if (mode === 'peek') {
+      toggleBtn.className = 'header-action attach';
+      toggleBtn.textContent = 'Attach';
+      toggleBtn.title = 'Switch to interactive mode';
+    } else {
+      toggleBtn.className = 'header-action detach';
+      toggleBtn.textContent = 'Detach';
+      toggleBtn.title = 'Switch back to headless (peek) mode';
+    }
+    toggleBtn.addEventListener('click', function() {
+      var action = mode === 'peek' ? 'attach' : 'detach';
+      toggleBtn.disabled = true;
+      toggleBtn.textContent = mode === 'peek' ? 'Attaching...' : 'Detaching...';
+      fetch('/interact/' + action, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ worker_id: worker }),
+      }).then(function() {
+        // SSE on the graph viewer will update the session mode.
+        // Redirect to the same page with the new mode after a brief delay
+        // so the worker has time to switch.
+        var newMode = mode === 'peek' ? 'interactive' : 'peek';
+        toggleBtn.textContent = 'Switching...';
+        setTimeout(function() {
+          var p = new URLSearchParams(window.location.search);
+          p.set('mode', newMode);
+          window.location.search = p.toString();
+        }, 3000);
+      }).catch(function() {
+        toggleBtn.disabled = false;
+        toggleBtn.textContent = mode === 'peek' ? 'Attach' : 'Detach';
+      });
+    });
+  }
+
+  // Load terminal
+  if (url) {
+    var iframe = document.getElementById('terminal');
+    iframe.src = url;
+    iframe.onload = function() {
+      document.getElementById('loading').style.display = 'none';
+      iframe.style.display = 'block';
+    };
+    // Fallback: show iframe after 3s even if onload doesn't fire (cross-origin)
+    setTimeout(function() {
+      document.getElementById('loading').style.display = 'none';
+      iframe.style.display = 'block';
+    }, 3000);
+  }
+})();
+</script>
+
+</body>
+</html>

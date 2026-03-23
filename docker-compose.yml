@@ -1,0 +1,74 @@
+include:
+  - docker-compose.infra.yml
+
+services:
+
+  cdc:
+    image: workflow-sidecar:latest
+    command: [workflow-cdc]
+    environment:
+      DATABASE_URL: postgres://forgejo:forgejo@postgres:5432/forgejo
+      NATS_URL: nats://nats:4222
+      CDC_POLL_MS: "250"
+      RUST_LOG: workflow_cdc=info
+    depends_on:
+      forgejo:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    restart: unless-stopped
+
+  sidecar:
+    image: workflow-sidecar:latest
+    command: [workflow-sidecar]
+    env_file: .sidecar.env
+    environment:
+      RUST_LOG: workflow_sidecar=info
+    volumes:
+      - sidecar-data:/data
+    ports:
+      - "8080:8080"
+    depends_on:
+      forgejo:
+        condition: service_healthy
+      nats:
+        condition: service_started
+      cdc:
+        condition: service_started
+    restart: unless-stopped
+
+  reviewer:
+    image: workflow-sidecar:latest
+    command: [workflow-reviewer]
+    env_file: .sidecar.env
+    environment:
+      RUST_LOG: workflow_reviewer=info
+    depends_on:
+      forgejo:
+        condition: service_healthy
+      nats:
+        condition: service_started
+      sidecar:
+        condition: service_started
+    restart: unless-stopped
+
+  runner:
+    image: gitea/act_runner:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - runner-shared-data:/data
+      - ./infra/runner/config.yaml:/config.yaml:ro
+    environment:
+      GITEA_INSTANCE_URL: http://forgejo:3000
+      GITEA_RUNNER_REGISTRATION_TOKEN: ${RUNNER_REGISTRATION_TOKEN:-}
+      GITEA_RUNNER_NAME: runner-shared
+      GITEA_RUNNER_LABELS: "ubuntu-latest:docker://workflow-runner-env:latest${RUNNER_EXTRA_LABELS:-}"
+      CONFIG_FILE: /config.yaml
+    depends_on:
+      forgejo:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  sidecar-data:
+  runner-shared-data:

@@ -1,0 +1,29 @@
+[package]
+name = "worker-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "worker-cli"
+path = "src/main.rs"
+
+[dependencies]
+workflow-types = { path = "../types" }
+workflow-worker = { path = "../worker" }
+
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { version = "4", features = ["derive", "env"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+# For dispatched worker mode (sim command)
+async-nats = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true }
+uuid = { workspace = true, features = ["v4", "v5"] }

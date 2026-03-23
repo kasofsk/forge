@@ -1,0 +1,167 @@
+# Forgejo Action: simulated agent work (test harness)
+#
+# Does the same thing as SimWorker but via Forgejo Actions — creates a branch,
+# commits a file, opens a PR, waits a bit, then completes (or fails 10% of the
+# time). Use this to test the ActionWorker → Forgejo Actions pipeline without
+# hitting Claude.
+
+name: Sim Work
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number to work on"
+        required: true
+      runner_label:
+        description: "Runner label (ignored by sim, here for parity)"
+        required: false
+        default: "ubuntu-latest"
+      forgejo_url:
+        description: "Forgejo instance URL"
+        required: false
+      delay_secs:
+        description: "Seconds to simulate work"
+        required: false
+        default: "10"
+
+jobs:
+  work:
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 10
+
+    env:
+      ISSUE_NUMBER: ${{ inputs.issue_number }}
+      FORGEJO_URL: ${{ inputs.forgejo_url || github.server_url }}
+      REPO_OWNER: ${{ github.repository_owner }}
+      REPO_NAME: ${{ github.event.repository.name }}
+      DELAY_SECS: ${{ inputs.delay_secs }}
+      FORGEJO_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ github.token }}
+
+      - name: Configure git credentials
+        run: |
+          git config user.name "sim-action"
+          git config user.email "sim-action@workflow.local"
+          git remote set-url origin "${FORGEJO_URL}/${REPO_OWNER}/${REPO_NAME}.git"
+          git config http.extraheader "Authorization: token ${FORGEJO_TOKEN}"
+
+      - name: Fetch issue title
+        id: issue
+        run: |
+          set -e
+          echo "::group::Fetching issue #${ISSUE_NUMBER}"
+          ISSUE_URL="${FORGEJO_URL}/api/v1/repos/${REPO_OWNER}/${REPO_NAME}/issues/${ISSUE_NUMBER}"
+          ISSUE_JSON=$(curl -sf \
+            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            "${ISSUE_URL}")
+          TITLE=$(echo "${ISSUE_JSON}" | jq -r '.title // "untitled"')
+          STATE=$(echo "${ISSUE_JSON}" | jq -r '.state // "unknown"')
+          echo "Issue #${ISSUE_NUMBER}: '${TITLE}' (state=${STATE})"
+          echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
+          echo "::endgroup::"
+
+      - name: Maybe fail (10% chance)
+        run: |
+          ROLL=$((RANDOM % 10))
+          echo "Issue #${ISSUE_NUMBER}: dice roll = ${ROLL}"
+          if [ "${ROLL}" -eq 0 ]; then
+            echo "::error::Issue #${ISSUE_NUMBER}: Simulated random failure (rolled ${ROLL})"
+            exit 1
+          fi
+          echo "Issue #${ISSUE_NUMBER}: proceeding (roll ${ROLL})"
+
+      - name: Create work branch
+        id: branch
+        run: |
+          BRANCH="work/action/${ISSUE_NUMBER}"
+          echo "Issue #${ISSUE_NUMBER}: creating branch '${BRANCH}'"
+          git checkout -b "${BRANCH}" 2>/dev/null || git checkout "${BRANCH}"
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+
+      - name: Simulate work
+        env:
+          ISSUE_TITLE: ${{ steps.issue.outputs.title }}
+        run: |
+          echo "Issue #${ISSUE_NUMBER} '${ISSUE_TITLE}': simulating work for ${DELAY_SECS}s"
+          mkdir -p work
+          cat > "work/${ISSUE_NUMBER}.md" <<WORKEOF
+          # ${ISSUE_TITLE}
+
+          Worker: action-runner (sim-work)
+          Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          Run ID: ${GITHUB_RUN_ID}
+          WORKEOF
+
+          sleep "${DELAY_SECS}"
+          echo "Issue #${ISSUE_NUMBER}: work complete"
+
+      - name: Commit and push
+        run: |
+          set -e
+          git add -A
+          echo "Issue #${ISSUE_NUMBER}: committing to branch ${{ steps.branch.outputs.branch }}"
+          git commit -m "work: ${{ steps.issue.outputs.title }} (#${ISSUE_NUMBER})"
+          echo "Issue #${ISSUE_NUMBER}: pushing to origin"
+          git push --force origin "${{ steps.branch.outputs.branch }}"
+          echo "Issue #${ISSUE_NUMBER}: push complete"
+
+      - name: Create pull request
+        env:
+          ISSUE_TITLE: ${{ steps.issue.outputs.title }}
+        run: |
+          set -e
+          BRANCH="${{ steps.branch.outputs.branch }}"
+          echo "::group::Creating PR for issue #${ISSUE_NUMBER} from branch '${BRANCH}'"
+
+          PR_BODY="Closes #${ISSUE_NUMBER}
+
+          Simulated work by action runner (run ${GITHUB_RUN_ID})."
+
+          # Check if a PR already exists for this specific branch.
+          # NOTE: Forgejo's head= filter is unreliable, so we fetch all open
+          # PRs and filter client-side by exact branch match.
+          echo "Issue #${ISSUE_NUMBER}: checking for existing PRs..."
+          ALL_OPEN=$(curl -sf \
+            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            "${FORGEJO_URL}/api/v1/repos/${REPO_OWNER}/${REPO_NAME}/pulls?state=open&limit=50")
+
+          EXISTING=$(echo "${ALL_OPEN}" | jq --arg branch "${BRANCH}" '[.[] | select(.head.ref == $branch)] | length')
+          echo "Issue #${ISSUE_NUMBER}: found ${EXISTING} open PR(s) for branch '${BRANCH}'"
+
+          if [ "${EXISTING}" != "0" ]; then
+            EXISTING_NUM=$(echo "${ALL_OPEN}" | jq --arg branch "${BRANCH}" '[.[] | select(.head.ref == $branch)][0].number')
+            echo "Issue #${ISSUE_NUMBER}: PR #${EXISTING_NUM} already exists for branch '${BRANCH}', skipping creation"
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          # Create the PR
+          echo "Issue #${ISSUE_NUMBER}: creating PR title='${ISSUE_TITLE}' head='${BRANCH}' base='main'"
+          HTTP_CODE=$(curl -s -o /tmp/pr_response.json -w "%{http_code}" -X POST \
+            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg title "${ISSUE_TITLE}" \
+              --arg body "${PR_BODY}" \
+              --arg head "${BRANCH}" \
+              --arg base "main" \
+              '{title: $title, body: $body, head: $head, base: $base}')" \
+            "${FORGEJO_URL}/api/v1/repos/${REPO_OWNER}/${REPO_NAME}/pulls")
+
+          if [ "${HTTP_CODE}" -ge 400 ]; then
+            echo "::error::Issue #${ISSUE_NUMBER}: PR creation failed (HTTP ${HTTP_CODE}):"
+            cat /tmp/pr_response.json
+            echo "::endgroup::"
+            exit 1
+          fi
+
+          PR_NUM=$(jq -r '.number' /tmp/pr_response.json)
+          echo "Issue #${ISSUE_NUMBER}: created PR #${PR_NUM}"
+          echo "::notice::Created PR #${PR_NUM} for issue #${ISSUE_NUMBER}"
+          echo "::endgroup::"

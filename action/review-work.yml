@@ -1,0 +1,222 @@
+# Forgejo Action: Claude Code PR review
+#
+# Triggered by the sidecar reviewer when a job transitions to InReview.
+# Fetches the PR diff and issue context, runs Claude to evaluate the changes,
+# and submits a PR review with the appropriate state (APPROVED/REQUEST_CHANGES/COMMENT).
+#
+# The reviewer process reads the review state via the Forgejo API to determine the decision.
+# This action does NOT merge or set labels — it only posts its assessment.
+#
+# Authentication — one of these must be set as a repo/org secret:
+#   ANTHROPIC_API_KEY         — direct API access
+#   CLAUDE_CODE_OAUTH_TOKEN   — Claude Max/Pro plan (from `claude /setup-token`)
+
+name: Review Work
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number being reviewed"
+        required: true
+      pr_number:
+        description: "PR number to review"
+        required: true
+      review_requirement:
+        description: "Required confidence level: low, medium, high"
+        required: false
+        default: "high"
+      runner_label:
+        description: "Runner label for job routing"
+        required: false
+        default: "ubuntu-latest"
+      forgejo_url:
+        description: "Forgejo instance URL (for API calls)"
+        required: false
+
+jobs:
+  review:
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 30
+
+    env:
+      ISSUE_NUMBER: ${{ inputs.issue_number }}
+      PR_NUMBER: ${{ inputs.pr_number }}
+      REVIEW_REQUIREMENT: ${{ inputs.review_requirement }}
+      FORGEJO_URL: ${{ inputs.forgejo_url || github.server_url }}
+      REPO_OWNER: ${{ github.repository_owner }}
+      REPO_NAME: ${{ github.event.repository.name }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch issue and PR context
+        id: context
+        env:
+          FORGEJO_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+
+          # Fetch issue
+          ISSUE_JSON=$(curl -sf \
+            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            "${FORGEJO_URL}/api/v1/repos/${REPO_OWNER}/${REPO_NAME}/issues/${ISSUE_NUMBER}")
+          ISSUE_TITLE=$(echo "${ISSUE_JSON}" | jq -r '.title // ""')
+          ISSUE_BODY=$(echo "${ISSUE_JSON}" | jq -r '.body // ""')
+
+          echo "title=${ISSUE_TITLE}" >> "$GITHUB_OUTPUT"
+
+          # Fetch PR details
+          PR_JSON=$(curl -sf \
+            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            "${FORGEJO_URL}/api/v1/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${PR_NUMBER}")
+          PR_BODY=$(echo "${PR_JSON}" | jq -r '.body // ""')
+
+          # Fetch PR diff
+          PR_DIFF=$(curl -sf \
+            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            "${FORGEJO_URL}/api/v1/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${PR_NUMBER}.diff")
+
+          # Fetch changed files list
+          FILES_JSON=$(curl -sf \
+            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            "${FORGEJO_URL}/api/v1/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${PR_NUMBER}/files")
+          FILE_LIST=$(echo "${FILES_JSON}" | jq -r '.[].filename // empty')
+
+          # Write to temp files for multi-line content
+          ISSUE_FILE=$(mktemp)
+          echo "${ISSUE_BODY}" > "${ISSUE_FILE}"
+          echo "issue_file=${ISSUE_FILE}" >> "$GITHUB_OUTPUT"
+
+          DIFF_FILE=$(mktemp)
+          # Truncate very large diffs to avoid exceeding context limits
+          DIFF_SIZE=$(echo "${PR_DIFF}" | wc -c)
+          if [ "${DIFF_SIZE}" -gt 100000 ]; then
+            echo "${PR_DIFF}" | head -c 100000 > "${DIFF_FILE}"
+            echo -e "\n\n... (diff truncated at 100KB, ${DIFF_SIZE} bytes total)" >> "${DIFF_FILE}"
+          else
+            echo "${PR_DIFF}" > "${DIFF_FILE}"
+          fi
+          echo "diff_file=${DIFF_FILE}" >> "$GITHUB_OUTPUT"
+
+          FILES_FILE=$(mktemp)
+          echo "${FILE_LIST}" > "${FILES_FILE}"
+          echo "files_file=${FILES_FILE}" >> "$GITHUB_OUTPUT"
+
+          PR_BODY_FILE=$(mktemp)
+          echo "${PR_BODY}" > "${PR_BODY_FILE}"
+          echo "pr_body_file=${PR_BODY_FILE}" >> "$GITHUB_OUTPUT"
+
+          echo "::notice::Reviewing PR #${PR_NUMBER} for issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
+
+      - name: Install Claude Code
+        run: |
+          npm install -g @anthropic-ai/claude-code
+
+      - name: Run Claude review
+        id: review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ISSUE_TITLE: ${{ steps.context.outputs.title }}
+        run: |
+          ISSUE_BODY=$(cat "${{ steps.context.outputs.issue_file }}")
+          PR_DIFF=$(cat "${{ steps.context.outputs.diff_file }}")
+          PR_BODY=$(cat "${{ steps.context.outputs.pr_body_file }}")
+          FILES=$(cat "${{ steps.context.outputs.files_file }}")
+
+          PROMPT="You are a code reviewer. Review the following pull request.
+
+          ## Issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}
+
+          ${ISSUE_BODY}
+
+          ## PR Description
+
+          ${PR_BODY}
+
+          ## Changed Files
+
+          ${FILES}
+
+          ## Diff
+
+          \`\`\`diff
+          ${PR_DIFF}
+          \`\`\`
+
+          ## Review Requirements
+
+          Confidence level required: **${REVIEW_REQUIREMENT}**
+
+          - **low**: Approve if the changes are roughly correct and don't introduce obvious bugs.
+          - **medium**: Approve if the changes correctly implement the issue requirements with reasonable code quality.
+          - **high**: Approve only if the changes are correct, complete, well-tested, and follow project conventions.
+
+          ## Instructions
+
+          Review the PR carefully. Consider:
+          1. Does the implementation match what the issue requested?
+          2. Are there bugs, edge cases, or security issues?
+          3. Is the code quality acceptable for the required confidence level?
+          4. Are there any missing tests or documentation?
+
+          You MUST end your review with exactly one of these decision lines:
+
+          DECISION: approve
+          DECISION: request_changes
+          DECISION: escalate
+
+          Use **approve** if the PR meets the required confidence level.
+          Use **request_changes** if you found specific issues the author should fix. List each issue clearly.
+          Use **escalate** if you are uncertain and want a human reviewer to decide.
+
+          After the DECISION line, write nothing else."
+
+          REVIEW_OUTPUT=$(claude --print "${PROMPT}" 2>&1) || true
+
+          # Write full review to file
+          REVIEW_FILE=$(mktemp)
+          echo "${REVIEW_OUTPUT}" > "${REVIEW_FILE}"
+          echo "review_file=${REVIEW_FILE}" >> "$GITHUB_OUTPUT"
+
+          # Extract decision
+          DECISION=$(echo "${REVIEW_OUTPUT}" | grep -oP '^DECISION:\s*\K\w+' | tail -1 || echo "escalate")
+          echo "decision=${DECISION}" >> "$GITHUB_OUTPUT"
+          echo "::notice::Review decision: ${DECISION}"
+
+      - name: Submit review
+        env:
+          FORGEJO_TOKEN: ${{ github.token }}
+          REVIEWER_TOKEN: ${{ secrets.REVIEWER_TOKEN }}
+          DECISION: ${{ steps.review.outputs.decision }}
+        run: |
+          set -e
+
+          REVIEW_BODY=$(cat "${{ steps.review.outputs.review_file }}")
+
+          # Use the reviewer identity (different user than PR author) for formal
+          # reviews to avoid Forgejo's self-review restriction.
+          REVIEW_TOKEN="${REVIEWER_TOKEN:-${FORGEJO_TOKEN}}"
+
+          # The review decision is conveyed via the PR review state
+          # (APPROVED/REQUEST_CHANGES/COMMENT), not comment markers.
+          # The reviewer process reads the state field from the Forgejo API.
+          if [ "${DECISION}" = "approve" ]; then
+            EVENT="APPROVED"
+          elif [ "${DECISION}" = "request_changes" ]; then
+            EVENT="REQUEST_CHANGES"
+          else
+            EVENT="COMMENT"
+          fi
+
+          curl -sf -X POST \
+            -H "Authorization: token ${REVIEW_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg body "${REVIEW_BODY}" --arg event "${EVENT}" '{body: $body, event: $event}')" \
+            "${FORGEJO_URL}/api/v1/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${PR_NUMBER}/reviews"
+
+          echo "::notice::Submitted ${DECISION} review on PR #${PR_NUMBER}"

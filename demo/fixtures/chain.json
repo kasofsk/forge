@@ -1,0 +1,47 @@
+{
+  "name": "chain",
+  "description": "Linear dependency chain: each job must complete before the next can start.",
+  "jobs": [
+    {
+      "id": "setup",
+      "title": "Set up development environment",
+      "body": "Install dependencies, configure tooling, verify the build works end-to-end.",
+      "labels": ["priority:80"]
+    },
+    {
+      "id": "schema",
+      "title": "Design database schema",
+      "body": "Define tables, indexes, and migration strategy. Must happen after setup.",
+      "labels": ["priority:70"],
+      "depends_on": ["setup"]
+    },
+    {
+      "id": "api",
+      "title": "Implement REST API",
+      "body": "Build CRUD endpoints on top of the schema. Requires schema to be finalised.",
+      "labels": ["priority:60"],
+      "depends_on": ["schema"]
+    },
+    {
+      "id": "tests",
+      "title": "Write integration tests",
+      "body": "Cover happy-path and error cases for every endpoint.",
+      "labels": ["priority:60"],
+      "depends_on": ["api"]
+    },
+    {
+      "id": "docs",
+      "title": "Write API documentation",
+      "body": "OpenAPI spec and developer guide.",
+      "labels": ["priority:40"],
+      "depends_on": ["tests"]
+    },
+    {
+      "id": "release",
+      "title": "Cut v1.0 release",
+      "body": "Tag, build artefacts, publish changelog.",
+      "labels": ["priority:90"],
+      "depends_on": ["docs"]
+    }
+  ]
+}

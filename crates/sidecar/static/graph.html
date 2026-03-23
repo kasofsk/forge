@@ -1,0 +1,2260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workflow Graph</title>
+<script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+<script src="https://unpkg.com/elkjs@0.9.3/lib/elk.bundled.js"></script>
+<script src="https://unpkg.com/cytoscape-elk@2.2.0/dist/cytoscape-elk.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0a0e17;
+    color: #c8ccd4;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+    height: 100vh;
+  }
+
+  #cy {
+    width: 100%;
+    height: 100%;
+    position: absolute;
+    top: 0; left: 0;
+  }
+
+  /* ── Header bar ─────────────────────────────────────────── */
+  #header {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 20px;
+    background: rgba(10, 14, 23, 0.85);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+
+  #header h1 {
+    font-size: 16px;
+    font-weight: 600;
+    color: #e2e6ed;
+    letter-spacing: 0.5px;
+  }
+
+  #repo-select {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 6px;
+    color: #c8ccd4;
+    padding: 5px 10px;
+    font-size: 13px;
+    outline: none;
+    min-width: 260px;
+  }
+  #repo-select:focus { border-color: rgba(100, 160, 255, 0.4); }
+  #repo-select option { background: #141822; color: #c8ccd4; }
+
+  #repo-filter {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 6px;
+    color: #c8ccd4;
+    padding: 5px 10px;
+    font-size: 13px;
+    outline: none;
+  }
+  #repo-filter:focus { border-color: rgba(100, 160, 255, 0.4); }
+  #repo-filter::placeholder { color: rgba(255,255,255,0.3); }
+
+  .legend {
+    display: flex;
+    gap: 14px;
+    margin-left: auto;
+    font-size: 12px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .legend-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+
+  /* ── Roster strip ───────────────────────────────────────── */
+  #roster {
+    position: fixed;
+    top: 52px; left: 0; right: 0;
+    z-index: 99;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 20px;
+    background: rgba(10, 14, 23, 0.8);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    min-height: 52px;
+  }
+
+  .roster-category {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    background: rgba(255,255,255,0.02);
+    flex-shrink: 0;
+  }
+
+  .roster-category-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: rgba(255,255,255,0.18);
+    writing-mode: vertical-lr;
+    text-orientation: mixed;
+    transform: rotate(180deg);
+    flex-shrink: 0;
+    line-height: 1;
+    padding: 2px 0;
+  }
+
+  .roster-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 6px;
+    background: rgba(255,255,255,0.02);
+    flex-shrink: 0;
+  }
+
+  .roster-group-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: rgba(255,255,255,0.25);
+    margin-right: 6px;
+    flex-shrink: 0;
+    line-height: 34px;
+  }
+
+  .roster-user {
+    position: relative;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: transform 0.15s ease;
+  }
+  .roster-user:hover {
+    transform: scale(1.15);
+  }
+  .roster-user.active {
+    transform: scale(1.15);
+  }
+
+  .roster-avatar {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    object-fit: cover;
+  }
+  .roster-user:hover .roster-avatar,
+  .roster-user.active .roster-avatar {
+    box-shadow: 0 0 12px rgba(100, 160, 255, 0.3);
+  }
+
+  .roster-avatar.state-idle     { border-color: #2ecc71; }
+  .roster-avatar.state-busy     { border-color: #3498db; }
+  .roster-avatar.state-transitioning { border-color: #e4a84a; }
+  .roster-avatar.state-unknown  { border-color: rgba(255,255,255,0.15); }
+
+  .roster-tooltip {
+    position: absolute;
+    bottom: -36px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(14, 18, 28, 0.95);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 11px;
+    color: #e2e6ed;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    text-align: center;
+    line-height: 1.4;
+  }
+  .roster-user:hover .roster-tooltip {
+    opacity: 1;
+  }
+  .roster-state {
+    font-size: 10px;
+    color: rgba(255,255,255,0.45);
+  }
+
+  .roster-claim-count {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    background: #3498db;
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    min-width: 16px;
+    height: 16px;
+    line-height: 16px;
+    text-align: center;
+    border-radius: 8px;
+    padding: 0 3px;
+    display: none;
+  }
+  .roster-claim-count.visible {
+    display: block;
+  }
+
+  /* ── Detail panel ───────────────────────────────────────── */
+  #detail {
+    position: fixed;
+    top: 104px; right: 0;
+    width: 360px;
+    height: calc(100vh - 104px);
+    background: rgba(14, 18, 28, 0.92);
+    backdrop-filter: blur(16px);
+    border-left: 1px solid rgba(255,255,255,0.06);
+    padding: 24px 20px;
+    transform: translateX(100%);
+    transition: transform 0.25s ease;
+    z-index: 90;
+    overflow-y: auto;
+  }
+  #detail.open { transform: translateX(0); }
+
+  #detail-close {
+    position: absolute;
+    top: 12px; right: 14px;
+    background: none; border: none;
+    color: rgba(255,255,255,0.4);
+    font-size: 20px;
+    cursor: pointer;
+  }
+  #detail-close:hover { color: #fff; }
+
+  #new-issue-btn {
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 6px;
+    color: #c8ccd4;
+    padding: 5px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  #new-issue-btn:hover { background: rgba(255,255,255,0.14); }
+
+  #new-issue-panel {
+    position: fixed;
+    top: 104px; right: 0;
+    width: 420px;
+    height: calc(100vh - 104px);
+    background: rgba(14, 18, 28, 0.95);
+    backdrop-filter: blur(16px);
+    border-left: 1px solid rgba(255,255,255,0.06);
+    transform: translateX(100%);
+    transition: transform 0.25s ease;
+    z-index: 95;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  #new-issue-panel.open { transform: translateX(0); }
+
+  #new-issue-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    flex-shrink: 0;
+  }
+  #new-issue-panel-header span {
+    font-size: 14px;
+    font-weight: 600;
+    color: #e2e6ed;
+  }
+  #new-issue-panel-close {
+    background: none; border: none;
+    color: rgba(255,255,255,0.4);
+    font-size: 20px;
+    cursor: pointer;
+  }
+  #new-issue-panel-close:hover { color: #fff; }
+
+  #new-issue-form {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    flex: 1;
+  }
+
+  #new-issue-form label {
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.5);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+  }
+
+  #new-issue-form .field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  #new-issue-title, #new-issue-body {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 6px;
+    color: #e2e6ed;
+    padding: 8px 10px;
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    resize: vertical;
+  }
+  #new-issue-title:focus, #new-issue-body:focus {
+    border-color: rgba(100, 160, 255, 0.4);
+  }
+  #new-issue-body { min-height: 120px; }
+
+  #new-issue-labels {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-height: 180px;
+    overflow-y: auto;
+  }
+
+  .ni-label-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    cursor: pointer;
+    border: 1px solid rgba(255,255,255,0.1);
+    transition: all 0.15s ease;
+    user-select: none;
+  }
+  .ni-label-chip .ni-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .ni-label-chip.selected {
+    border-color: rgba(100, 160, 255, 0.5);
+    background: rgba(100, 160, 255, 0.12);
+  }
+
+  #new-issue-submit {
+    background: #2563eb;
+    border: none;
+    border-radius: 6px;
+    color: #fff;
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease;
+    margin-top: auto;
+  }
+  #new-issue-submit:hover { background: #1d4ed8; }
+  #new-issue-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  #new-issue-status {
+    font-size: 12px;
+    text-align: center;
+    min-height: 18px;
+  }
+  #new-issue-status.error { color: #e74c3c; }
+  #new-issue-status.success { color: #2ecc71; }
+
+  #detail h2 {
+    font-size: 15px;
+    font-weight: 600;
+    color: #e2e6ed;
+    margin-bottom: 16px;
+    padding-right: 30px;
+    line-height: 1.4;
+  }
+
+  .detail-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    font-size: 13px;
+  }
+  .detail-label { color: rgba(255,255,255,0.4); }
+  .detail-value { color: #c8ccd4; font-weight: 500; }
+
+  .state-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .dep-list {
+    margin-top: 16px;
+  }
+  .dep-list h3 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: rgba(255,255,255,0.3);
+    margin-bottom: 8px;
+  }
+  .dep-item {
+    padding: 6px 0;
+    font-size: 13px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    cursor: pointer;
+  }
+  .dep-item:hover { color: #fff; }
+
+  a.forgejo-link {
+    display: inline-block;
+    margin-top: 16px;
+    color: rgba(100, 160, 255, 0.8);
+    text-decoration: none;
+    font-size: 13px;
+  }
+  a.forgejo-link:hover { color: #fff; }
+
+  /* ── Journal panel ───────────────────────────────────────── */
+  #journal {
+    position: fixed;
+    top: 104px; left: 0;
+    width: 400px;
+    height: calc(100vh - 104px);
+    background: rgba(14, 18, 28, 0.92);
+    backdrop-filter: blur(16px);
+    border-right: 1px solid rgba(255,255,255,0.06);
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    z-index: 90;
+    display: flex;
+    flex-direction: column;
+  }
+  #journal.open { transform: translateX(0); }
+
+  #journal-header {
+    padding: 16px 20px 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  #journal-header h2 {
+    font-size: 15px;
+    font-weight: 600;
+    color: #e2e6ed;
+    flex: 1;
+  }
+  #journal-close {
+    background: none; border: none;
+    color: rgba(255,255,255,0.4);
+    font-size: 20px;
+    cursor: pointer;
+  }
+  #journal-close:hover { color: #fff; }
+
+  #journal-entries {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+  }
+
+  .journal-entry {
+    padding: 10px 20px;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .journal-entry:hover {
+    background: rgba(255,255,255,0.02);
+  }
+
+  .journal-time {
+    font-size: 10px;
+    color: rgba(255,255,255,0.25);
+    margin-bottom: 3px;
+  }
+
+  .journal-action {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-right: 6px;
+  }
+  .journal-action.assign   { background: #3498db; color: #fff; }
+  .journal-action.complete { background: #1a9e5a; color: #fff; }
+  .journal-action.fail     { background: #e74c3c; color: #fff; }
+  .journal-action.abandon  { background: #e4a84a; color: #0a0e17; }
+  .journal-action.preempt  { background: #8b5cf6; color: #fff; }
+  .journal-action.changes-requested { background: #f59e0b; color: #0a0e17; }
+  .journal-action.register { background: rgba(255,255,255,0.12); color: #c8ccd4; }
+  .journal-action.approve  { background: #1a9e5a; color: #fff; }
+  .journal-action.escalate { background: #3b82f6; color: #fff; }
+
+  .journal-comment {
+    color: #c8ccd4;
+  }
+
+  /* ── Node widgets (HTML overlay cards) ─────────────────────── */
+  #node-widgets {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    z-index: 10;
+  }
+
+  .node-widget {
+    position: absolute;
+    width: 240px;
+    pointer-events: auto;
+    cursor: pointer;
+    background: rgba(18, 22, 32, 0.92);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    color: #c8ccd4;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    transform: translate(-50%, -50%);
+  }
+  .node-widget.highlighted {
+    border-color: rgba(255,255,255,0.5);
+    box-shadow: 0 0 12px rgba(255,255,255,0.1);
+  }
+  .node-widget.dimmed {
+    opacity: 0.15;
+  }
+
+  .nw-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+  }
+
+  .nw-number {
+    font-weight: 700;
+    font-size: 11px;
+    color: rgba(255,255,255,0.5);
+    flex-shrink: 0;
+  }
+
+  .nw-state {
+    display: inline-block;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+
+  .nw-title {
+    font-size: 11px;
+    line-height: 1.3;
+    color: #e2e6ed;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .nw-footer {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 5px;
+  }
+
+  .nw-avatar {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 1px solid rgba(255,255,255,0.15);
+  }
+
+  .nw-assignee {
+    font-size: 10px;
+    color: rgba(255,255,255,0.4);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .nw-badge {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    object-fit: cover;
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+  .nw-badge.worker   { box-shadow: 0 0 4px rgba(52,152,219,0.6); }
+  .nw-badge.reviewer { box-shadow: 0 0 4px rgba(139,92,246,0.6); }
+
+  .nw-agent-badge {
+    position: absolute;
+    bottom: -6px;
+    right: -6px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid #0a0e17;
+  }
+  .nw-agent-badge.worker   { box-shadow: 0 0 6px rgba(52,152,219,0.6); }
+  .nw-agent-badge.reviewer { box-shadow: 0 0 6px rgba(139,92,246,0.6); }
+
+  .nw-wave {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    font-size: 14px;
+    line-height: 1;
+    filter: drop-shadow(0 0 3px rgba(255,255,255,0.3));
+  }
+
+  .nw-links {
+    display: flex;
+    gap: 4px;
+    margin-top: 5px;
+    flex-wrap: wrap;
+  }
+
+  .nw-activity {
+    margin-top: 4px;
+    font-size: 8px;
+  }
+
+  .nw-activity-latest {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .nw-activity-toggle {
+    background: none;
+    border: none;
+    color: rgba(255,255,255,0.3);
+    font-size: 8px;
+    cursor: pointer;
+    padding: 0 2px;
+    pointer-events: auto;
+    line-height: 1;
+  }
+
+  .nw-activity-toggle:hover {
+    color: rgba(255,255,255,0.6);
+  }
+
+  .nw-activity-history {
+    display: none;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 3px;
+    padding-top: 3px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .nw-activity-history.open {
+    display: flex;
+  }
+
+  .nw-act-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .nw-act-avatar {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 1px solid rgba(255,255,255,0.1);
+    flex-shrink: 0;
+  }
+
+  .nw-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 8px;
+    font-weight: 600;
+    text-decoration: none;
+    pointer-events: auto;
+    border: 1px solid rgba(255,255,255,0.1);
+    background: rgba(255,255,255,0.04);
+    color: rgba(255,255,255,0.5);
+    transition: background 0.1s ease, color 0.1s ease;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+  .nw-link:hover {
+    background: rgba(255,255,255,0.1);
+    color: #e2e6ed;
+  }
+  .nw-link.pr-merged  { border-color: rgba(26,158,90,0.3); color: #1a9e5a; }
+  .nw-link.pr-open    { border-color: rgba(46,204,113,0.3); color: #2ecc71; }
+  .nw-link.pr-closed  { border-color: rgba(99,110,125,0.3); color: #636e7d; }
+
+  .nw-link.run-success  { border-color: rgba(46,204,113,0.3); color: #2ecc71; }
+  .nw-link.run-failure  { border-color: rgba(231,76,60,0.3); color: #e74c3c; }
+  .nw-link.run-running  { border-color: rgba(52,152,219,0.3); color: #3498db; }
+  .nw-link.act-escalated { border-color: rgba(249,115,22,0.3); color: #f97316; }
+  .nw-link.act-changes  { border-color: rgba(245,158,11,0.3); color: #f59e0b; }
+  .nw-link.act-replay   { border-color: rgba(139,92,246,0.3); color: #8b5cf6; }
+  .nw-link.run-waiting  { border-color: rgba(228,168,74,0.3); color: #e4a84a; }
+  .nw-link.run-blocked  { border-color: rgba(228,168,74,0.3); color: #e4a84a; }
+  .nw-link.session-link { border-color: rgba(249,115,22,0.4); color: #f97316; }
+
+  .journal-meta {
+    font-size: 11px;
+    color: rgba(255,255,255,0.3);
+    margin-top: 3px;
+  }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>Workflow Graph</h1>
+  <select id="repo-select">
+    <option value="">Loading…</option>
+  </select>
+  <input id="repo-filter" type="text" placeholder="Filter repos…" style="width:140px">
+  <button id="new-issue-btn" onclick="toggleNewIssuePanel()">+ New Issue</button>
+  <div class="legend">
+    <div class="legend-item"><span class="legend-dot" style="background:#2ecc71"></span> on-deck</div>
+    <div class="legend-item"><span class="legend-dot" style="background:#e4a84a"></span> blocked</div>
+    <div class="legend-item"><span class="legend-dot" style="background:#3498db"></span> on-stack</div>
+    <div class="legend-item"><span class="legend-dot" style="background:#f97316"></span> needs-help</div>
+    <div class="legend-item"><span class="legend-dot" style="background:#8b5cf6"></span> in-review</div>
+    <div class="legend-item"><span class="legend-dot" style="background:#f59e0b"></span> changes requested</div>
+    <div class="legend-item"><span class="legend-dot" style="background:#4a6356"></span> done</div>
+    <div class="legend-item"><span class="legend-dot" style="background:#e74c3c"></span> failed</div>
+    <div class="legend-item"><span class="legend-dot" style="background:#6b7280"></span> revoked</div>
+    <div class="legend-item"><span class="legend-dot" style="background:#636e7d"></span> on-ice</div>
+  </div>
+</div>
+
+<div id="roster"></div>
+
+<div id="journal">
+  <div id="journal-header">
+    <h2>Dispatcher Journal</h2>
+    <button id="journal-close">&times;</button>
+  </div>
+  <div id="journal-entries"></div>
+</div>
+
+<div id="cy"></div>
+<div id="node-widgets"></div>
+
+<div id="detail">
+  <button id="detail-close">&times;</button>
+  <div id="detail-content"></div>
+</div>
+
+<div id="new-issue-panel">
+  <div id="new-issue-panel-header">
+    <span>New Issue</span>
+    <button id="new-issue-panel-close" onclick="toggleNewIssuePanel()">&times;</button>
+  </div>
+  <div id="new-issue-form">
+    <div class="field">
+      <label>Title</label>
+      <input id="new-issue-title" type="text" placeholder="Issue title">
+    </div>
+    <div class="field">
+      <label>Body</label>
+      <textarea id="new-issue-body" placeholder="Describe the issue…"></textarea>
+    </div>
+    <div class="field">
+      <label>Dependencies</label>
+      <input id="new-issue-deps" type="text" placeholder="#1, #2, …">
+    </div>
+    <div class="field">
+      <label>Initial State</label>
+      <div id="new-issue-state" style="display:flex;gap:12px;margin-top:4px;">
+        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:13px;">
+          <input type="radio" name="ni-state" value="on-ice" checked> On-Ice
+        </label>
+        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:13px;">
+          <input type="radio" name="ni-state" value="on-deck"> On-Deck
+        </label>
+      </div>
+    </div>
+    <div id="new-issue-status"></div>
+    <button id="new-issue-submit" onclick="submitNewIssue()">Create Issue</button>
+  </div>
+</div>
+
+<script>
+const STATE_COLORS = {
+  on_deck:      { bg: '#2ecc71', glow: 'rgba(46,204,113,0.5)' },
+  blocked:      { bg: '#e4a84a', glow: 'rgba(228,168,74,0.4)' },
+  on_the_stack: { bg: '#3498db', glow: 'rgba(52,152,219,0.5)' },
+  needs_help:   { bg: '#f97316', glow: 'rgba(249,115,22,0.6)' },
+  in_review:    { bg: '#8b5cf6', glow: 'rgba(139,92,246,0.5)' },
+  changes_requested:       { bg: '#f59e0b', glow: 'rgba(245,158,11,0.5)' },
+  done:         { bg: '#4a6356', glow: 'rgba(74,99,86,0.2)' },
+  failed:       { bg: '#e74c3c', glow: 'rgba(231,76,60,0.5)' },
+  revoked:      { bg: '#6b7280', glow: 'rgba(107,114,128,0.3)' },
+  on_ice:       { bg: '#636e7d', glow: 'rgba(99,110,125,0.3)' },
+};
+
+const STATE_LABELS = {
+  on_deck: 'on-deck', blocked: 'blocked', on_the_stack: 'on-stack',
+  needs_help: 'needs-help', in_review: 'in-review', changes_requested: 'changes requested',
+  done: 'done', failed: 'failed', revoked: 'revoked', on_ice: 'on-ice',
+};
+
+let cy = null;
+let allJobs = [];
+let allUsers = [];
+let allWorkers = [];       // WorkerInfo[] from /dispatch/workers
+let allSessions = [];      // SessionInfo[] from /interact/sessions
+let dispatchWorkers = {};  // worker_id → WorkerInfo
+let activeSessions = {};   // job_key → SessionInfo
+let activeRosterUser = null;
+
+async function fetchJobs() {
+  const resp = await fetch('/jobs');
+  const data = await resp.json();
+  return data.jobs || [];
+}
+
+async function fetchUsers(owner, repo) {
+  try {
+    const resp = await fetch(`/repos/${owner}/${repo}/users`);
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    return data.users || [];
+  } catch { return []; }
+}
+
+const SYNC_LOGIN = 'workflow-sync';
+const DISPATCHER_LOGIN = 'workflow-dispatcher';
+const REVIEWER_LOGIN = 'workflow-reviewer';
+const HUMAN_LOGIN = 'you';
+
+// These data sources are populated via SSE snapshot — no HTTP polling needed.
+function fetchJournal() { return journalEntries; }
+function fetchDispatchWorkers() { return dispatchWorkers; }
+function fetchSessions() { /* data comes via SSE */ }
+
+/** Build a /terminal wrapper URL for a session. */
+function terminalUrl(session, job) {
+  const key = job ? `${job.repo_owner}/${job.repo_name}/${job.number}` : '';
+  return `/terminal?url=${encodeURIComponent(session.session_url)}&mode=${encodeURIComponent(session.mode)}&job=${encodeURIComponent(key)}&worker=${encodeURIComponent(session.worker_id)}`;
+}
+
+// Track pending attach/detach so buttons can show loading state.
+let pendingSessionAction = null; // { workerId, action: 'attach'|'detach' }
+
+async function attachSession(workerId) {
+  pendingSessionAction = { workerId, action: 'attach' };
+  refreshSessionButtons();
+  try {
+    await fetch('/interact/attach', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ worker_id: workerId }),
+    });
+    // SSE session_update will clear pendingSessionAction and re-render.
+    // Safety timeout in case the worker doesn't respond.
+    setTimeout(() => {
+      if (pendingSessionAction && pendingSessionAction.workerId === workerId) {
+        pendingSessionAction = null;
+        refreshSessionButtons();
+      }
+    }, 10000);
+  } catch {
+    pendingSessionAction = null;
+    refreshSessionButtons();
+  }
+}
+
+async function detachSession(workerId) {
+  pendingSessionAction = { workerId, action: 'detach' };
+  refreshSessionButtons();
+  try {
+    await fetch('/interact/detach', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ worker_id: workerId }),
+    });
+    setTimeout(() => {
+      if (pendingSessionAction && pendingSessionAction.workerId === workerId) {
+        pendingSessionAction = null;
+        refreshSessionButtons();
+      }
+    }, 10000);
+  } catch {
+    pendingSessionAction = null;
+    refreshSessionButtons();
+  }
+}
+
+function refreshSessionButtons() {
+  // Re-render detail panel if open to reflect loading state.
+  const sel = cy && cy.$(':selected');
+  if (sel && sel.length) showDetail(sel[0].data('job'));
+}
+
+function jobKey(j) {
+  return `${j.repo_owner}/${j.repo_name}/${j.number}`;
+}
+
+function getJobsForUser(login) {
+  return allJobs.filter(j =>
+    (j.assignees || []).includes(login) &&
+    !['done', 'revoked', 'failed'].includes(j.state)
+  );
+}
+
+function buildGraph(jobs) {
+  const nodes = [];
+  const edges = [];
+  const keySet = new Set(jobs.map(jobKey));
+
+  for (const j of jobs) {
+    const col = STATE_COLORS[j.state] || STATE_COLORS.blocked;
+    // Find avatar for the first assignee (if any)
+    const assignee = (j.assignees || [])[0];
+    const assigneeUser = assignee ? allUsers.find(u => u.login === assignee) : null;
+    const avatarUrl = assigneeUser ? assigneeUser.avatar_url : null;
+
+    nodes.push({
+      data: {
+        id: jobKey(j),
+        label: `#${j.number}`,
+        title: j.title,
+        state: j.state,
+        color: col.bg,
+        glow: col.glow,
+        job: j,
+        avatarUrl: avatarUrl,
+      },
+    });
+
+    for (const dep of (j.dependency_numbers || [])) {
+      const depKey = `${j.repo_owner}/${j.repo_name}/${dep}`;
+      if (keySet.has(depKey)) {
+        edges.push({
+          data: {
+            id: `${depKey}->${jobKey(j)}`,
+            source: depKey,
+            target: jobKey(j),
+          },
+        });
+      }
+    }
+  }
+
+  return { nodes, edges };
+}
+
+function renderGraph(jobs) {
+  const { nodes, edges } = buildGraph(jobs);
+
+  if (cy) cy.destroy();
+
+  cy = cytoscape({
+    container: document.getElementById('cy'),
+    elements: [...nodes, ...edges],
+    minZoom: 0.15,
+    maxZoom: 3,
+    wheelSensitivity: 0.3,
+
+    style: [
+      {
+        selector: 'node',
+        style: {
+          // Invisible — HTML widgets are the visual representation
+          'width': 240,
+          'height': 100,
+          'shape': 'rectangle',
+          'background-opacity': 0,
+          'border-width': 0,
+          'label': '',
+        },
+      },
+      {
+        selector: 'edge',
+        style: {
+          'width': 1.5,
+          'line-color': 'rgba(255,255,255,0.15)',
+          'target-arrow-color': 'rgba(255,255,255,0.15)',
+          'target-arrow-shape': 'triangle',
+          'arrow-scale': 1,
+          'curve-style': 'taxi',
+          'taxi-direction': 'rightward',
+          'taxi-turn': '50%',
+          'taxi-turn-min-distance': 20,
+        },
+      },
+      {
+        selector: 'edge.highlighted',
+        style: {
+          'line-color': 'rgba(255,255,255,0.5)',
+          'target-arrow-color': 'rgba(255,255,255,0.5)',
+          'width': 2.5,
+        },
+      },
+      {
+        selector: 'edge.dimmed',
+        style: {
+          'opacity': 0.08,
+        },
+      },
+    ],
+
+    layout: {
+      name: 'elk',
+      elk: {
+        algorithm: 'layered',
+        'elk.direction': 'RIGHT',
+        'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
+        'elk.layered.nodePlacement.strategy': 'BRANDES_KOEPF',
+        'elk.spacing.nodeNode': 24,
+        'elk.layered.spacing.nodeNodeBetweenLayers': 100,
+        'elk.spacing.edgeNode': 20,
+        'elk.spacing.edgeEdge': 12,
+        'elk.edgeRouting': 'ORTHOGONAL',
+        'elk.layered.mergeEdges': true,
+      },
+      animate: false,
+    },
+  });
+
+  // ── Click: show detail panel ──
+  cy.on('tap', 'node', function (evt) {
+    const node = evt.target;
+    const job = node.data('job');
+    showDetail(job);
+    highlightNeighborhood(node);
+    deactivateRoster();
+  });
+
+  cy.on('tap', function (evt) {
+    if (evt.target === cy) {
+      closeDetail();
+      clearHighlights();
+      deactivateRoster();
+    }
+  });
+
+  // Reposition widgets on pan/zoom
+  cy.on('pan zoom', updateWidgets);
+  // Initial widget render after layout settles
+  setTimeout(updateWidgets, 100);
+}
+
+function highlightNeighborhood(node) {
+  clearHighlights();
+  const connected = node.neighborhood().add(node);
+  cy.elements().addClass('dimmed');
+  connected.removeClass('dimmed').addClass('highlighted');
+  connected.connectedEdges().removeClass('dimmed').addClass('highlighted');
+  syncWidgetClasses();
+}
+
+function highlightUserJobs(login) {
+  if (!cy) return;
+  clearHighlights();
+  const userJobs = getJobsForUser(login);
+  if (userJobs.length === 0) {
+    cy.elements().addClass('dimmed');
+    syncWidgetClasses();
+    return;
+  }
+  const userNodeIds = new Set(userJobs.map(jobKey));
+  cy.elements().addClass('dimmed');
+  for (const id of userNodeIds) {
+    const node = cy.getElementById(id);
+    if (node && node.length) {
+      node.removeClass('dimmed').addClass('highlighted');
+      node.connectedEdges().removeClass('dimmed').addClass('highlighted');
+    }
+  }
+  syncWidgetClasses();
+}
+
+function clearHighlights() {
+  if (cy) cy.elements().removeClass('dimmed highlighted');
+  syncWidgetClasses();
+}
+
+function syncWidgetClasses() {
+  document.querySelectorAll('.node-widget').forEach(el => {
+    const key = el.dataset.key;
+    if (!key || !cy) return;
+    const node = cy.getElementById(key);
+    if (!node || !node.length) return;
+    el.classList.toggle('dimmed', node.hasClass('dimmed'));
+    el.classList.toggle('highlighted', node.hasClass('highlighted'));
+  });
+}
+
+// ── Roster ──
+
+function workerStateClass(login) {
+  const w = dispatchWorkers[login];
+  if (!w) return 'state-unknown';
+  return `state-${w.state}`;
+}
+
+function workerTooltipHtml(login) {
+  const displayName = (() => {
+    const u = allUsers.find(u => u.login === login);
+    return (u && u.full_name) ? u.full_name : login;
+  })();
+
+  if (login === SYNC_LOGIN) {
+    return `${displayName}<br><span class="roster-state">sync service</span>`;
+  }
+
+  if (login === DISPATCHER_LOGIN) {
+    return `${displayName}<br><span class="roster-state">dispatcher — click for journal</span>`;
+  }
+
+  if (login === REVIEWER_LOGIN) {
+    return `${displayName}<br><span class="roster-state">automated reviewer</span>`;
+  }
+
+  if (login === HUMAN_LOGIN) {
+    return `${displayName}<br><span class="roster-state">human reviewer</span>`;
+  }
+
+  const w = dispatchWorkers[login];
+  if (!w) return `${displayName}<br><span class="roster-state">not registered</span>`;
+
+  let stateText = w.state;
+  if (w.state === 'busy' && w.current_job_key) {
+    const parts = w.current_job_key.split('/');
+    const num = parts[parts.length - 1];
+    stateText = `working on #${num}`;
+  }
+  return `${displayName}<br><span class="roster-state">${stateText}</span>`;
+}
+
+function createUserEl(user) {
+  const claimCount = getJobsForUser(user.login).length;
+  const el = document.createElement('div');
+  el.className = 'roster-user';
+  el.dataset.login = user.login;
+
+  const stateClass = workerStateClass(user.login);
+
+  el.innerHTML = `
+    <img class="roster-avatar ${stateClass}" src="${user.avatar_url}" alt="${user.login}" title="${user.login}">
+    <span class="roster-claim-count ${claimCount > 0 ? 'visible' : ''}">${claimCount}</span>
+    <span class="roster-tooltip">${workerTooltipHtml(user.login)}</span>
+  `;
+
+  el.addEventListener('mouseenter', () => {
+    if (activeRosterUser) return;
+    if (![SYNC_LOGIN, DISPATCHER_LOGIN, REVIEWER_LOGIN, HUMAN_LOGIN].includes(user.login)) {
+      highlightUserJobs(user.login);
+    }
+  });
+
+  el.addEventListener('mouseleave', () => {
+    if (activeRosterUser) return;
+    if (![SYNC_LOGIN, DISPATCHER_LOGIN, REVIEWER_LOGIN, HUMAN_LOGIN].includes(user.login)) {
+      clearHighlights();
+    }
+  });
+
+  el.addEventListener('click', () => {
+    if (activeRosterUser === user.login) {
+      deactivateRoster();
+      clearHighlights();
+      closeJournal();
+    } else {
+      deactivateRoster();
+      activeRosterUser = user.login;
+      el.classList.add('active');
+      closeDetail();
+
+      if (user.login === DISPATCHER_LOGIN || user.login === REVIEWER_LOGIN) {
+        openJournal();
+      } else if (user.login === SYNC_LOGIN || user.login === HUMAN_LOGIN) {
+        clearHighlights();
+      } else {
+        closeJournal();
+        highlightUserJobs(user.login);
+      }
+    }
+  });
+
+  return el;
+}
+
+function renderRoster(users) {
+  const container = document.getElementById('roster');
+  container.innerHTML = '';
+
+  const agentLogins = [SYNC_LOGIN, DISPATCHER_LOGIN, REVIEWER_LOGIN];
+  const syncUser = users.find(u => u.login === SYNC_LOGIN);
+  const dispatcherUser = users.find(u => u.login === DISPATCHER_LOGIN);
+  const reviewerUser = users.find(u => u.login === REVIEWER_LOGIN);
+  const humanUser = users.find(u => u.login === HUMAN_LOGIN);
+  const workers = users.filter(u => !agentLogins.includes(u.login) && u.login !== HUMAN_LOGIN);
+
+  // ── Agents category: dispatch → workers → review ──
+  const agentCat = document.createElement('div');
+  agentCat.className = 'roster-category';
+  agentCat.innerHTML = '<span class="roster-category-label">Agents</span>';
+
+  if (dispatcherUser) {
+    const group = document.createElement('div');
+    group.className = 'roster-group';
+    group.innerHTML = '<span class="roster-group-label">Dispatch</span>';
+    group.appendChild(createUserEl(dispatcherUser));
+    agentCat.appendChild(group);
+  }
+
+  if (workers.length > 0) {
+    const group = document.createElement('div');
+    group.className = 'roster-group';
+    group.innerHTML = '<span class="roster-group-label">Workers</span>';
+    for (const w of workers) {
+      group.appendChild(createUserEl(w));
+    }
+    agentCat.appendChild(group);
+  }
+
+  if (reviewerUser) {
+    const group = document.createElement('div');
+    group.className = 'roster-group';
+    group.innerHTML = '<span class="roster-group-label">Review</span>';
+    group.appendChild(createUserEl(reviewerUser));
+    agentCat.appendChild(group);
+  }
+
+  container.appendChild(agentCat);
+
+  // ── Humans category ──
+  if (humanUser) {
+    const humanCat = document.createElement('div');
+    humanCat.className = 'roster-category';
+    humanCat.innerHTML = '<span class="roster-category-label">Humans</span>';
+    const group = document.createElement('div');
+    group.className = 'roster-group';
+    group.appendChild(createUserEl(humanUser));
+    humanCat.appendChild(group);
+    container.appendChild(humanCat);
+  }
+}
+
+// ── Node widgets: HTML card overlays ──
+
+function getActiveBadgeInfo(key, state) {
+  // Worker badge: busy worker on this job
+  for (const [wid, w] of Object.entries(dispatchWorkers)) {
+    if (w.state === 'busy' && w.current_job_key === key) {
+      const user = allUsers.find(u => u.login === wid);
+      if (user) return { login: wid, avatarUrl: user.avatar_url, role: 'worker' };
+    }
+  }
+  // Reviewer badge: in-review jobs
+  if (state === 'in_review') {
+    const user = allUsers.find(u => u.login === REVIEWER_LOGIN);
+    if (user) return { login: REVIEWER_LOGIN, avatarUrl: user.avatar_url, role: 'reviewer' };
+  }
+  return null;
+}
+
+// Cache for linked PR numbers: jobKey → prInfo (or null if checked but not found)
+const linkedPRs = {};
+// Set of job keys that have been escalated to human review
+let escalatedJobs = new Set();
+
+async function findLinkedPR(owner, repo, issueNumber) {
+  const key = `${owner}/${repo}/${issueNumber}`;
+  if (key in linkedPRs) return linkedPRs[key];
+
+  try {
+    const forgejoBase = 'http://localhost:3000';
+    const resp = await fetch(`${forgejoBase}/api/v1/repos/${owner}/${repo}/pulls?state=all&limit=50`);
+    if (!resp.ok) { linkedPRs[key] = null; return null; }
+    const prs = await resp.json();
+    const pattern = `Closes #${issueNumber}`;
+    const linked = prs.find(pr => (pr.body || '').includes(pattern));
+    linkedPRs[key] = linked ? { number: linked.number, merged: linked.merged, state: linked.state, headRef: linked.head?.ref } : null;
+    return linkedPRs[key];
+  } catch {
+    linkedPRs[key] = null;
+    return null;
+  }
+}
+
+// ── Activity rendering helpers ──
+
+function activityStatusClass(status) {
+  if (status === 'success') return 'run-success';
+  if (status === 'failure') return 'run-failure';
+  if (status === 'running') return 'run-running';
+  if (status === 'escalated') return 'act-escalated';
+  if (status === 'changes_requested') return 'act-changes';
+  return 'run-waiting';
+}
+
+function activityStatusIcon(status) {
+  if (status === 'success') return '&#10003;';
+  if (status === 'failure') return '&#10005;';
+  if (status === 'running') return '&#9654;';
+  if (status === 'escalated') return '&#128075;';
+  if (status === 'changes_requested') return '&#9998;';
+  return '&#9679;';
+}
+
+async function refreshEscalatedJobs() {
+  const entries = await fetchJournal();
+  const s = new Set();
+  for (const e of entries) {
+    if (e.action === 'escalate' && e.job_key) s.add(e.job_key);
+  }
+  escalatedJobs = s;
+}
+
+function buildWidgetHtml(job, key, badge, forgejoBase) {
+    const col = STATE_COLORS[job.state] || STATE_COLORS.blocked;
+    const stateLabel = STATE_LABELS[job.state] || job.state;
+
+    // Invalidate stale PR cache: if job is done but cached PR shows not-merged
+    const prInfo = linkedPRs[key];
+    if (job.state === 'done' && prInfo && !prInfo.merged) {
+      delete linkedPRs[key];
+    }
+    const pr = linkedPRs[key];
+
+    const issueUrl = `${forgejoBase}/${job.repo_owner}/${job.repo_name}/issues/${job.number}`;
+    let linksHtml = `<a class="nw-link" href="${issueUrl}" target="_blank" title="Open issue #${job.number}">Issue</a>`;
+
+    if (pr) {
+      const prUrl = `${forgejoBase}/${job.repo_owner}/${job.repo_name}/pulls/${pr.number}`;
+      const prClass = pr.merged ? 'pr-merged' : (pr.state === 'open' ? 'pr-open' : 'pr-closed');
+      const prIcon = pr.merged ? '&#10003;' : (pr.state === 'open' ? '&#9679;' : '&#10005;');
+      linksHtml += `<a class="nw-link ${prClass}" href="${prUrl}" target="_blank" title="PR #${pr.number}">${prIcon} PR #${pr.number}</a>`;
+    }
+
+    // Activity strip — separate row below links
+    const activities = job.activities || [];
+    let activityHtml = '';
+    if (activities.length > 0) {
+      const widgetId = key.replace(/\//g, '-');
+      const latest = activities[activities.length - 1];
+      // Find the most recent running interactive session (the one that owns the live session).
+      const latestRunning = [...activities].reverse().find(a => a.kind === 'interactive_session' && a.status === 'running');
+      const latestPill = buildActivityPill(latest, key, job, forgejoBase, latestRunning);
+
+      if (activities.length === 1) {
+        activityHtml = `<div class="nw-activity"><div class="nw-activity-latest">${latestPill}</div></div>`;
+      } else {
+        // Show latest + toggle for history
+        const older = activities.slice(0, -1).reverse();
+        let historyHtml = '';
+        for (const act of older) {
+          historyHtml += `<div class="nw-act-row">${buildActivityPill(act, key, job, forgejoBase, latestRunning)}</div>`;
+        }
+        activityHtml = `<div class="nw-activity">
+          <div class="nw-activity-latest">
+            ${latestPill}
+            <button class="nw-activity-toggle" onclick="event.stopPropagation();this.parentElement.nextElementSibling.classList.toggle('open');this.textContent=this.textContent==='▾'?'▴':'▾'" title="Show activity history">▾</button>
+          </div>
+          <div class="nw-activity-history" id="act-${widgetId}">${historyHtml}</div>
+        </div>`;
+      }
+    }
+
+    const isEscalated = escalatedJobs.has(key) && !['done', 'revoked'].includes(job.state);
+    const waveHtml = isEscalated ? '<span class="nw-wave">👋</span>' : '';
+    const badgeHtml = badge
+      ? `<img class="nw-agent-badge ${badge.role}" src="${badge.avatarUrl}" alt="${badge.login}" title="${badge.login}">`
+      : '';
+
+    return `
+      ${waveHtml}
+      ${badgeHtml}
+      <div class="nw-header">
+        <span class="nw-number">#${job.number}</span>
+        <span class="nw-state" style="background:${col.bg};color:#0a0e17">${stateLabel}</span>
+      </div>
+      <div class="nw-title" title="${job.title}">${job.title}</div>
+      <div class="nw-links">${linksHtml}</div>
+      ${activityHtml}
+    `;
+}
+
+/** Get a small avatar img tag for a worker/reviewer login, or empty string. */
+function actorAvatar(login) {
+    if (!login) return '';
+    const user = allUsers.find(u => u.login === login);
+    const url = user ? user.avatar_url : `http://localhost:3000/user/avatar/${login}/-1`;
+    return `<img class="nw-act-avatar" src="${url}" alt="${login}" title="${login}">`;
+}
+
+/** Render a single activity as a pill with avatar (used by widget and history).
+ *  latestRunning = the most recent running interactive_session activity (owns the live session). */
+function buildActivityPill(act, key, job, forgejoBase, latestRunning) {
+    const cls = activityStatusClass(act.status);
+    const icon = activityStatusIcon(act.status);
+    const wid = act.worker_id || (act.kind === 'review' ? 'workflow-reviewer' : '');
+    const avatar = actorAvatar(wid);
+
+    if (act.kind === 'interactive_session') {
+      if (act.status === 'running') {
+        // Show peek/terminal link if this is the activity with the live session.
+        // Only one session exists per job at a time, so the link only appears once.
+        const session = allSessions.find(s => s.job_key === key);
+        if (session && act === latestRunning) {
+          const tUrl = terminalUrl(session, job);
+          if (session.mode === 'interactive') {
+            return `${avatar}<a class="nw-link session-link" href="${tUrl}" target="_blank" title="Interactive terminal">&#128187; Interactive</a>`;
+          } else {
+            return `${avatar}<a class="nw-link" href="${tUrl}" target="_blank" title="Peek at headless output" style="color:rgba(180,140,255,0.8)">&#128065; Peek</a>`;
+          }
+        }
+        return `${avatar}<span class="nw-link ${cls}" title="Session ${act === latestRunning ? 'starting' : 'ended'}">${icon} agent</span>`;
+      } else if (act.recording_key) {
+        const replayUrl = `/sessions/${job.repo_owner}/${job.repo_name}/${job.number}/${act.session_id}/output`;
+        return `${avatar}<a class="nw-link act-replay" href="${replayUrl}" target="_blank" title="View session recording">${icon} replay</a>`;
+      }
+      return `${avatar}<span class="nw-link ${cls}" title="Session ${act.status}">${icon} agent</span>`;
+    } else if (act.kind === 'action_run') {
+      const runUrl = act.run_id ? `${forgejoBase}/${job.repo_owner}/${job.repo_name}/actions/runs/${act.run_id}` : '#';
+      const label = (act.workflow || 'action').replace(/\.ya?ml$/, '');
+      return `${avatar}<a class="nw-link ${cls}" href="${runUrl}" target="_blank" title="${label}: ${act.status}">${icon} ${label}</a>`;
+    } else if (act.kind === 'review') {
+      const decision = act.decision || '';
+      const reviewIcon = decision === 'approve' ? '&#10003;'
+        : decision === 'request_changes' ? '&#8634;'
+        : decision === 'escalate' ? '&#128172;'
+        : icon;
+      const reviewCls = decision === 'approve' ? 'run-success'
+        : decision === 'request_changes' ? 'act-changes'
+        : decision === 'escalate' ? 'act-escalated'
+        : cls;
+      const label = decision || 'review';
+      return `${avatar}<span class="nw-link ${reviewCls}" title="Review: ${label}">${reviewIcon} ${label}</span>`;
+    }
+    return '';
+}
+
+function updateWidgets() {
+  const container = document.getElementById('node-widgets');
+  if (!cy) { container.innerHTML = ''; return; }
+
+  const pan = cy.pan();
+  const zoom = cy.zoom();
+  const forgejoBase = 'http://localhost:3000';
+
+  // Build set of current node keys
+  const currentKeys = new Set();
+
+  cy.nodes().forEach(node => {
+    const job = node.data('job');
+    if (!job) return;
+
+    const key = node.id();
+    currentKeys.add(key);
+    const pos = node.position();
+    const x = pos.x * zoom + pan.x;
+    const y = pos.y * zoom + pan.y;
+    const col = STATE_COLORS[job.state] || STATE_COLORS.blocked;
+    const badge = getActiveBadgeInfo(key, job.state);
+    const isDimmed = node.hasClass('dimmed');
+    const isHighlighted = node.hasClass('highlighted');
+
+    // Reuse existing element or create new one
+    let el = container.querySelector(`[data-key="${CSS.escape(key)}"]`);
+    const isNew = !el;
+    if (isNew) {
+      el = document.createElement('div');
+      el.dataset.key = key;
+      // Click widget → open detail + highlight (same as clicking the Cytoscape node)
+      el.addEventListener('click', function (e) {
+        // Don't intercept clicks on links/buttons inside the widget
+        if (e.target.closest('a, button')) return;
+        const node = cy.getElementById(key);
+        if (node && node.length) {
+          const j = node.data('job');
+          if (j) showDetail(j);
+          highlightNeighborhood(node);
+          deactivateRoster();
+        }
+      });
+    }
+
+    el.className = 'node-widget' + (isDimmed ? ' dimmed' : '') + (isHighlighted ? ' highlighted' : '');
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+    el.style.borderLeftColor = col.bg;
+    el.style.borderLeftWidth = '3px';
+    el.style.transform = `translate(-50%, -50%) scale(${zoom})`;
+
+    // Only update innerHTML if content changed (avoids destroying hovered links)
+    const newHtml = buildWidgetHtml(job, key, badge, forgejoBase);
+    if (el._lastHtml !== newHtml) {
+      el.innerHTML = newHtml;
+      el._lastHtml = newHtml;
+    }
+
+    if (isNew) container.appendChild(el);
+  });
+
+  // Remove stale widgets for nodes no longer in the graph
+  container.querySelectorAll('.node-widget').forEach(el => {
+    if (!currentKeys.has(el.dataset.key)) el.remove();
+  });
+
+  // Kick off async PR lookups for in_review/changes_requested/done jobs.
+  // Activities are already on the job (from SSE) — no need to poll Forgejo for action runs.
+  cy.nodes().forEach(node => {
+    const job = node.data('job');
+    if (!job) return;
+    if (['in_review', 'changes_requested', 'done'].includes(job.state)) {
+      const key = node.id();
+      if (!(key in linkedPRs)) {
+        findLinkedPR(job.repo_owner, job.repo_name, job.number).then(() => {
+          if (linkedPRs[key]) updateWidgets();
+        });
+      }
+    }
+  });
+}
+
+function deactivateRoster() {
+  activeRosterUser = null;
+  document.querySelectorAll('.roster-user.active').forEach(el => el.classList.remove('active'));
+  closeJournal();
+}
+
+function updateRosterCounts() {
+  document.querySelectorAll('.roster-user').forEach(el => {
+    const login = el.dataset.login;
+    const count = getJobsForUser(login).length;
+    const badge = el.querySelector('.roster-claim-count');
+    if (badge) {
+      badge.textContent = count;
+      badge.classList.toggle('visible', count > 0);
+    }
+  });
+}
+
+// ── Journal panel ──
+
+function formatTime(ts) {
+  const d = new Date(ts);
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+async function openJournal() {
+  // Journal entries are kept in memory via SSE — no fetch needed.
+  refreshJournalPanel();
+  document.getElementById('journal').classList.add('open');
+}
+
+function closeJournal() {
+  document.getElementById('journal').classList.remove('open');
+}
+
+document.getElementById('journal-close').addEventListener('click', () => {
+  closeJournal();
+  deactivateRoster();
+  clearHighlights();
+});
+
+function updateRosterState() {
+  document.querySelectorAll('.roster-user').forEach(el => {
+    const login = el.dataset.login;
+    const avatar = el.querySelector('.roster-avatar');
+    if (avatar) {
+      avatar.className = 'roster-avatar ' + workerStateClass(login);
+    }
+    const tooltip = el.querySelector('.roster-tooltip');
+    if (tooltip) {
+      tooltip.innerHTML = workerTooltipHtml(login);
+    }
+  });
+}
+
+function showDetail(job) {
+  const panel = document.getElementById('detail');
+  const content = document.getElementById('detail-content');
+  const col = STATE_COLORS[job.state] || STATE_COLORS.blocked;
+  const stateLabel = STATE_LABELS[job.state] || job.state;
+
+  let html = `
+    <h2>${job.title}</h2>
+    <div class="detail-row">
+      <span class="detail-label">Ref</span>
+      <span class="detail-value">${job.repo_owner}/${job.repo_name}/#${job.number}</span>
+    </div>
+    <div class="detail-row">
+      <span class="detail-label">State</span>
+      <span class="state-badge" style="background:${col.bg};color:#0a0e17">${stateLabel}</span>
+    </div>
+    <div class="detail-row">
+      <span class="detail-label">Priority</span>
+      <span class="detail-value">${job.priority}</span>
+    </div>
+  `;
+
+  if (job.assignees && job.assignees.length > 0) {
+    const assigneeChips = job.assignees.map(a => {
+      const user = allUsers.find(u => u.login === a);
+      if (user) {
+        return `<img src="${user.avatar_url}" style="width:18px;height:18px;border-radius:50%;vertical-align:middle;margin-right:4px">${a}`;
+      }
+      return a;
+    }).join(', ');
+    html += `
+      <div class="detail-row">
+        <span class="detail-label">Assignees</span>
+        <span class="detail-value">${assigneeChips}</span>
+      </div>
+    `;
+  }
+
+  if (job.timeout_secs) {
+    html += `
+      <div class="detail-row">
+        <span class="detail-label">Timeout</span>
+        <span class="detail-value">${job.timeout_secs}s</span>
+      </div>
+    `;
+  }
+
+  if (job.dependency_numbers && job.dependency_numbers.length > 0) {
+    const depItems = job.dependency_numbers.map(dep => {
+      const depKey = `${job.repo_owner}/${job.repo_name}/${dep}`;
+      const depJob = allJobs.find(j => jobKey(j) === depKey);
+      const depTitle = depJob ? depJob.title : `#${dep}`;
+      const depCol = depJob ? (STATE_COLORS[depJob.state] || STATE_COLORS.blocked).bg : '#636e7d';
+      return `<div class="dep-item" onclick="selectNode('${depKey}')">
+        <span class="legend-dot" style="background:${depCol};margin-right:6px"></span>
+        #${dep} — ${depTitle}
+      </div>`;
+    }).join('');
+
+    html += `<div class="dep-list"><h3>Dependencies</h3>${depItems}</div>`;
+  }
+
+  // Find jobs that depend on this one (reverse deps)
+  const reverseDeps = allJobs.filter(j =>
+    j.repo_owner === job.repo_owner &&
+    j.repo_name === job.repo_name &&
+    (j.dependency_numbers || []).includes(job.number)
+  );
+
+  if (reverseDeps.length > 0) {
+    const rdItems = reverseDeps.map(rd => {
+      const rdKey = jobKey(rd);
+      const rdCol = (STATE_COLORS[rd.state] || STATE_COLORS.blocked).bg;
+      return `<div class="dep-item" onclick="selectNode('${rdKey}')">
+        <span class="legend-dot" style="background:${rdCol};margin-right:6px"></span>
+        #${rd.number} — ${rd.title}
+      </div>`;
+    }).join('');
+
+    html += `<div class="dep-list"><h3>Dependents</h3>${rdItems}</div>`;
+  }
+
+  // PR link placeholder — filled async for in-review/rework/done states
+  const prContainerId = `pr-link-${job.repo_owner}-${job.repo_name}-${job.number}`;
+  if (['in_review', 'changes_requested', 'done'].includes(job.state)) {
+    html += `<div id="${prContainerId}" style="margin-top:12px"></div>`;
+  }
+
+  // Session controls — for on-the-stack or needs-help jobs assigned to an interactive worker
+  if (['on_the_stack', 'needs_help'].includes(job.state) && job.assignees && job.assignees.length > 0) {
+    const workerId = job.assignees[0];
+    const worker = allWorkers.find(w => w.worker_id === workerId);
+    if (worker && worker.worker_type === 'interactive') {
+      const jk = `${job.repo_owner}/${job.repo_name}/${job.number}`;
+      const session = allSessions.find(s => s.job_key === jk);
+      const isPending = pendingSessionAction && pendingSessionAction.workerId === workerId;
+      const pendingAction = isPending ? pendingSessionAction.action : null;
+
+      const btnStyle = (bg, fg) => `
+        display:inline-block;background:${bg};color:${fg};
+        border:1px solid ${fg};border-radius:6px;
+        padding:6px 14px;font-size:13px;cursor:pointer;text-decoration:none;
+      `;
+      const disabledStyle = `
+        display:inline-block;background:rgba(255,255,255,0.05);color:rgba(255,255,255,0.3);
+        border:1px solid rgba(255,255,255,0.1);border-radius:6px;
+        padding:6px 14px;font-size:13px;cursor:wait;
+      `;
+
+      html += '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">';
+      if (session && session.mode === 'interactive') {
+        html += `<a href="${terminalUrl(session, job)}" target="_blank" style="${btnStyle('rgba(30,200,100,0.15)','rgba(30,200,100,0.9)')}">Open terminal &rarr;</a>`;
+        if (pendingAction === 'detach') {
+          html += `<span style="${disabledStyle}">Detaching&hellip;</span>`;
+        } else {
+          html += `<button onclick="detachSession('${workerId}')" style="${btnStyle('rgba(255,160,60,0.15)','rgba(255,160,60,0.9)')}" ${isPending ? 'disabled' : ''}>Detach</button>`;
+        }
+      } else if (session && session.mode === 'peek') {
+        html += `<a href="${terminalUrl(session, job)}" target="_blank" style="${btnStyle('rgba(180,140,255,0.15)','rgba(180,140,255,0.9)')}">Peek output &rarr;</a>`;
+        if (pendingAction === 'attach') {
+          html += `<span style="${disabledStyle}">Attaching&hellip;</span>`;
+        } else {
+          html += `<button onclick="attachSession('${workerId}')" style="${btnStyle('rgba(100,160,255,0.15)','rgba(100,160,255,0.9)')}" ${isPending ? 'disabled' : ''}>Attach</button>`;
+        }
+      } else {
+        // No session yet
+        if (pendingAction === 'attach') {
+          html += `<span style="${disabledStyle}">Attaching&hellip;</span>`;
+        } else {
+          html += `<button onclick="attachSession('${workerId}')" style="${btnStyle('rgba(100,160,255,0.15)','rgba(100,160,255,0.9)')}" ${isPending ? 'disabled' : ''}>Attach</button>`;
+        }
+      }
+
+      if (job.state === 'needs_help') {
+        html += '<span style="font-size:11px;color:rgba(249,115,22,0.8);margin-left:4px">Waiting for human input</span>';
+      }
+      html += '</div>';
+    }
+  }
+
+  // Activity timeline
+  const activities = job.activities || [];
+  if (activities.length > 0) {
+    // Find the most recent running interactive session (the one that owns the live session).
+    const latestRunningAct = [...activities].reverse().find(a => a.kind === 'interactive_session' && a.status === 'running');
+    html += '<div class="dep-list"><h3>Activity</h3>';
+    for (const act of activities) {
+      let icon = activityStatusIcon(act.status);
+      let cls = activityStatusClass(act.status);
+      const time = act.started_at ? new Date(act.started_at).toLocaleTimeString() : '';
+      let label = act.kind.replace('_', ' ');
+      let detail = '';
+
+      if (act.kind === 'interactive_session') {
+        label = `Agent session (${act.worker_id})`;
+        if (act.status === 'running') {
+          const jobKey = `${job.repo_owner}/${job.repo_name}/${job.number}`;
+          const session = allSessions.find(s => s.job_key === jobKey);
+          if (session && act === latestRunningAct) {
+            detail = `<a href="${terminalUrl(session, job)}" target="_blank" style="color:rgba(180,140,255,0.8);text-decoration:none;margin-left:6px">${session.mode === 'interactive' ? 'terminal' : 'peek'} &rarr;</a>`;
+          }
+        } else if (act.recording_key) {
+          const replayUrl = `/sessions/${job.repo_owner}/${job.repo_name}/${job.number}/${act.session_id}/output`;
+          detail = `<a href="${replayUrl}" target="_blank" style="color:rgba(139,92,246,0.8);text-decoration:none;margin-left:6px">replay &rarr;</a>`;
+        }
+      } else if (act.kind === 'action_run') {
+        const wf = (act.workflow || 'action').replace(/\.ya?ml$/, '');
+        label = `Action: ${wf} (${act.worker_id})`;
+        if (act.run_id) {
+          detail = `<a href="http://localhost:3000/${job.repo_owner}/${job.repo_name}/actions/runs/${act.run_id}" target="_blank" style="color:rgba(100,160,255,0.8);text-decoration:none;margin-left:6px">run &rarr;</a>`;
+        }
+      } else if (act.kind === 'review') {
+        const decision = act.decision || '';
+        label = `Review${decision ? ': ' + decision : ''}`;
+        // Override icon/color based on decision.
+        if (decision === 'approve') {
+          icon = '&#10003;'; cls = 'run-success';
+        } else if (decision === 'request_changes') {
+          icon = '&#8634;'; cls = 'act-changes';
+        } else if (decision === 'escalate') {
+          icon = '&#128172;'; cls = 'act-escalated';
+        }
+        if (act.run_id) {
+          detail = `<a href="http://localhost:3000/${job.repo_owner}/${job.repo_name}/actions/runs/${act.run_id}" target="_blank" style="color:rgba(100,160,255,0.8);text-decoration:none;margin-left:6px">run &rarr;</a>`;
+        }
+      }
+
+      const iconColor = cls === 'run-success' ? '#2ecc71' : cls === 'run-failure' ? '#e74c3c' : cls === 'run-running' ? '#3498db' : cls === 'act-escalated' ? '#f97316' : cls === 'act-changes' ? '#f59e0b' : '#e4a84a';
+      html += `<div class="dep-item" style="cursor:default">
+        <span style="color:${iconColor}">${icon}</span>
+        <span style="margin-left:6px">${label}</span>
+        <span style="font-size:10px;color:rgba(255,255,255,0.3);margin-left:6px">${time}</span>
+        ${detail}
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  // Link to Forgejo
+  const forgejoBase = 'http://localhost:3000';
+  html += `<a class="forgejo-link" href="${forgejoBase}/${job.repo_owner}/${job.repo_name}/issues/${job.number}" target="_blank">
+    Open in Forgejo &rarr;
+  </a>`;
+
+  content.innerHTML = html;
+  panel.classList.add('open');
+
+  // Async: fetch linked PR for in-review/rework/done jobs
+  if (['in_review', 'changes_requested', 'done'].includes(job.state)) {
+    fetchLinkedPR(job, prContainerId);
+  }
+}
+
+async function fetchLinkedPR(job, containerId) {
+  try {
+    const forgejoBase = 'http://localhost:3000';
+    const resp = await fetch(`${forgejoBase}/api/v1/repos/${job.repo_owner}/${job.repo_name}/pulls?state=open&limit=50`);
+    if (!resp.ok) return;
+    const prs = await resp.json();
+    // Also check closed PRs
+    const resp2 = await fetch(`${forgejoBase}/api/v1/repos/${job.repo_owner}/${job.repo_name}/pulls?state=closed&limit=50`);
+    const closedPrs = resp2.ok ? await resp2.json() : [];
+    const allPrs = [...prs, ...closedPrs];
+
+    const pattern = `Closes #${job.number}`;
+    const linked = allPrs.find(pr =>
+      (pr.body || '').toLowerCase().includes(pattern.toLowerCase())
+    );
+
+    const el = document.getElementById(containerId);
+    if (!el) return;
+
+    if (linked) {
+      const stateIcon = linked.merged ? '&check;' : (linked.state === 'open' ? '&bull;' : '&times;');
+      const stateText = linked.merged ? 'merged' : linked.state;
+      const stateColor = linked.merged ? '#1a9e5a' : (linked.state === 'open' ? '#2ecc71' : '#636e7d');
+      el.innerHTML = `
+        <div class="detail-row">
+          <span class="detail-label">Pull Request</span>
+          <span class="detail-value">
+            <span style="color:${stateColor}">${stateIcon}</span>
+            <a href="${linked.html_url}" target="_blank" style="color:rgba(100,160,255,0.8);text-decoration:none">
+              #${linked.number} — ${linked.title}
+            </a>
+            <span style="font-size:11px;color:rgba(255,255,255,0.35);margin-left:4px">(${stateText})</span>
+          </span>
+        </div>`;
+    }
+  } catch { /* ignore fetch errors */ }
+}
+
+function closeDetail() {
+  document.getElementById('detail').classList.remove('open');
+}
+
+function selectNode(key) {
+  const node = cy.getElementById(key);
+  if (node && node.length) {
+    cy.animate({ center: { eles: node }, zoom: 1.5 }, { duration: 300 });
+    const job = node.data('job');
+    showDetail(job);
+    highlightNeighborhood(node);
+    deactivateRoster();
+  }
+}
+
+// ── Repo filter ──
+function populateRepoSelect(filter) {
+  const select = document.getElementById('repo-select');
+  const repos = [...new Set(allJobs.map(j => `${j.repo_owner}/${j.repo_name}`))].sort();
+  const filtered = filter
+    ? repos.filter(r => r.toLowerCase().includes(filter.toLowerCase()))
+    : repos;
+
+  const prev = select.value;
+  select.innerHTML = '';
+  if (filtered.length === 0) {
+    select.innerHTML = '<option value="">No repos found</option>';
+    return;
+  }
+  for (const r of filtered) {
+    const opt = document.createElement('option');
+    opt.value = r;
+    opt.textContent = `${r} (${allJobs.filter(j => `${j.repo_owner}/${j.repo_name}` === r).length})`;
+    select.appendChild(opt);
+  }
+  // Restore previous selection if still present
+  if (filtered.includes(prev)) select.value = prev;
+}
+
+let newIssueLabelCache = {};
+
+function toggleNewIssuePanel() {
+  const panel = document.getElementById('new-issue-panel');
+  const isOpen = panel.classList.toggle('open');
+  if (isOpen) {
+    document.getElementById('new-issue-title').value = '';
+    document.getElementById('new-issue-body').value = '';
+    document.getElementById('new-issue-deps').value = '';
+    document.getElementById('new-issue-status').textContent = '';
+    // Reset radio to on-ice
+    const onIce = document.querySelector('input[name="ni-state"][value="on-ice"]');
+    if (onIce) onIce.checked = true;
+    loadLabelsForNewIssue();
+  }
+}
+
+async function loadLabelsForNewIssue() {
+  const repo = document.getElementById('repo-select').value;
+  if (!repo) return;
+  try {
+    const [owner, name] = repo.split('/');
+    const resp = await fetch(`/repos/${owner}/${name}/labels`);
+    const data = await resp.json();
+    // Cache status label IDs for the radio selection
+    newIssueLabelCache = {};
+    for (const label of data.labels) {
+      newIssueLabelCache[label.name] = label.id;
+    }
+  } catch (e) {
+    console.warn('Failed to load labels', e);
+  }
+}
+
+async function submitNewIssue() {
+  const repo = document.getElementById('repo-select').value;
+  if (!repo) return;
+  const title = document.getElementById('new-issue-title').value.trim();
+  let body = document.getElementById('new-issue-body').value;
+  const depsRaw = document.getElementById('new-issue-deps').value.trim();
+  const stateRadio = document.querySelector('input[name="ni-state"]:checked');
+  const statusEl = document.getElementById('new-issue-status');
+  const btn = document.getElementById('new-issue-submit');
+
+  if (!title) {
+    statusEl.className = 'error';
+    statusEl.textContent = 'Title is required';
+    return;
+  }
+
+  // Parse deps: "#1, #2" or "1, 2" → [1, 2]
+  const depNumbers = depsRaw
+    ? depsRaw.split(/[,\s]+/).map(s => parseInt(s.replace('#', ''), 10)).filter(n => n > 0)
+    : [];
+
+  // Append visible deps section + hidden marker to body
+  if (depNumbers.length > 0) {
+    const depLinks = depNumbers.map(n => `- #${n}`).join('\n');
+    const depCsv = depNumbers.join(',');
+    body = `${body}\n\n## Dependencies\n\n${depLinks}\n\n<!-- workflow:deps:${depCsv} -->`;
+  }
+
+  // Determine status label from radio
+  const stateName = stateRadio ? stateRadio.value : 'on-ice';
+  const labelKey = `status:${stateName}`;
+  const labelId = newIssueLabelCache[labelKey];
+  const selectedLabels = labelId ? [labelId] : [];
+
+  btn.disabled = true;
+  statusEl.className = '';
+  statusEl.textContent = 'Creating\u2026';
+
+  try {
+    const [owner, name] = repo.split('/');
+    const resp = await fetch(`/repos/${owner}/${name}/issues`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, body, labels: selectedLabels }),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    const data = await resp.json();
+    statusEl.className = 'success';
+    statusEl.textContent = `Created #${data.number}`;
+
+    // Auto-close panel after 1.5s
+    setTimeout(() => {
+      const panel = document.getElementById('new-issue-panel');
+      if (panel.classList.contains('open')) {
+        panel.classList.remove('open');
+      }
+    }, 1500);
+  } catch (e) {
+    statusEl.className = 'error';
+    statusEl.textContent = `Error: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function showSelectedRepo() {
+  const repo = document.getElementById('repo-select').value;
+  if (!repo) return;
+  const [owner, name] = repo.split('/');
+
+  // Fetch users, dispatch state, and active sessions in parallel
+  const [users, dw] = await Promise.all([
+    fetchUsers(owner, name),
+    fetchDispatchWorkers(),
+    fetchSessions(),
+  ]);
+  allUsers = users;
+  dispatchWorkers = dw;
+
+  const filtered = allJobs.filter(j => `${j.repo_owner}/${j.repo_name}` === repo);
+  renderGraph(filtered);
+  closeDetail();
+  deactivateRoster();
+  renderRoster(allUsers);
+}
+
+document.getElementById('repo-select').addEventListener('change', showSelectedRepo);
+
+document.getElementById('repo-filter').addEventListener('input', function () {
+  populateRepoSelect(this.value.trim());
+});
+
+document.getElementById('detail-close').addEventListener('click', () => {
+  closeDetail();
+  clearHighlights();
+  deactivateRoster();
+});
+
+// ── Incremental graph update (shared by snapshot + event handlers) ──
+function applyIncrementalUpdate() {
+  const repo = document.getElementById('repo-select').value;
+  if (!repo || !cy) return;
+  const filtered = allJobs.filter(j => `${j.repo_owner}/${j.repo_name}` === repo);
+
+  const currentNodeIds = new Set(cy.nodes().map(n => n.id()));
+  const newJobIds = new Set(filtered.map(jobKey));
+  const hasNewNodes = filtered.some(j => !currentNodeIds.has(jobKey(j)));
+  const hasRemovedNodes = [...currentNodeIds].some(id => !newJobIds.has(id));
+
+  if (hasNewNodes || hasRemovedNodes) {
+    populateRepoSelect(document.getElementById('repo-filter').value.trim());
+
+    for (const id of currentNodeIds) {
+      if (!newJobIds.has(id)) {
+        const w = document.getElementById(`widget-${CSS.escape(id)}`);
+        if (w) w.remove();
+        cy.remove(cy.getElementById(id));
+      }
+    }
+
+    const { nodes: allNodes, edges: allEdges } = buildGraph(filtered);
+    for (const n of allNodes) {
+      if (!currentNodeIds.has(n.data.id)) cy.add(n);
+    }
+    cy.edges().remove();
+    for (const e of allEdges) cy.add(e);
+
+    const zoom = cy.zoom();
+    const pan = { ...cy.pan() };
+    cy.layout({
+      name: 'elk',
+      elk: {
+        algorithm: 'layered',
+        'elk.direction': 'RIGHT',
+        'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
+        'elk.layered.nodePlacement.strategy': 'BRANDES_KOEPF',
+        'elk.spacing.nodeNode': 24,
+        'elk.layered.spacing.nodeNodeBetweenLayers': 100,
+        'elk.spacing.edgeNode': 20,
+        'elk.spacing.edgeEdge': 12,
+        'elk.edgeRouting': 'ORTHOGONAL',
+        'elk.layered.mergeEdges': true,
+      },
+      animate: true, animationDuration: 300,
+    }).run();
+    setTimeout(() => { cy.zoom(zoom); cy.pan(pan); updateWidgets(); }, 350);
+  } else {
+    for (const j of filtered) {
+      const node = cy.getElementById(jobKey(j));
+      if (node && node.length) {
+        const col = STATE_COLORS[j.state] || STATE_COLORS.blocked;
+        node.data('state', j.state);
+        node.data('color', col.bg);
+        node.data('glow', col.glow);
+        node.data('job', j);
+      }
+    }
+  }
+  updateRosterCounts();
+  updateRosterState();
+  updateWidgets();
+  if (activeRosterUser) highlightUserJobs(activeRosterUser);
+}
+
+// ── SSE connection ──
+let journalEntries = [];
+
+function rebuildEscalatedJobs(entries) {
+  escalatedJobs = new Set();
+  for (const e of entries) {
+    if (e.action === 'escalate' && e.job_key) escalatedJobs.add(e.job_key);
+  }
+}
+
+function refreshJournalPanel() {
+  const panel = document.getElementById('journal');
+  if (!panel.classList.contains('open')) return;
+  // Re-render journal entries
+  const container = document.getElementById('journal-entries');
+  if (journalEntries.length === 0) {
+    container.innerHTML = '<div style="padding:20px;color:rgba(255,255,255,0.3);text-align:center">No actions yet</div>';
+  } else {
+    container.innerHTML = journalEntries.slice(0, 200).map(e => {
+      const actionClass = e.action || '';
+      let metaParts = [];
+      if (e.worker_id) metaParts.push(e.worker_id);
+      if (e.job_key) {
+        const parts = e.job_key.split('/');
+        metaParts.push(`#${parts[parts.length - 1]}`);
+      }
+      const meta = metaParts.length > 0
+        ? `<div class="journal-meta">${metaParts.join(' · ')}</div>`
+        : '';
+      return `<div class="journal-entry">
+        <div class="journal-time">${formatTime(e.timestamp)}</div>
+        <span class="journal-action ${actionClass}">${e.action}</span>
+        <span class="journal-comment">${e.comment}</span>
+        ${meta}
+      </div>`;
+    }).join('');
+  }
+}
+
+function applySnapshot(data) {
+  allJobs = data.jobs || [];
+  allWorkers = data.workers || [];
+  dispatchWorkers = {};
+  for (const w of allWorkers) dispatchWorkers[w.worker_id] = w;
+  allSessions = data.sessions || [];
+  journalEntries = data.journal || [];
+  rebuildEscalatedJobs(journalEntries);
+
+  populateRepoSelect(document.getElementById('repo-filter').value.trim());
+  const repos = [...new Set(allJobs.map(j => `${j.repo_owner}/${j.repo_name}`))].sort();
+
+  // If no repo is selected, pick one
+  const currentRepo = document.getElementById('repo-select').value;
+  if (!currentRepo || !repos.includes(currentRepo)) {
+    if (repos.length >= 1) {
+      const nonTest = repos.filter(r => !r.includes('/test-'));
+      const pick = nonTest.length > 0 ? nonTest[nonTest.length - 1] : repos[repos.length - 1];
+      document.getElementById('repo-select').value = pick;
+    }
+  }
+
+  showSelectedRepo();
+}
+
+function connectSSE() {
+  const es = new EventSource('/events');
+
+  es.addEventListener('snapshot', (e) => {
+    const data = JSON.parse(e.data);
+    applySnapshot(data);
+  });
+
+  es.addEventListener('job_update', (e) => {
+    const { data: { job } } = JSON.parse(e.data);
+    const key = jobKey(job);
+    const idx = allJobs.findIndex(j => jobKey(j) === key);
+    if (idx >= 0) allJobs[idx] = job;
+    else allJobs.push(job);
+    applyIncrementalUpdate();
+  });
+
+  es.addEventListener('worker_update', (e) => {
+    const { data: { worker } } = JSON.parse(e.data);
+    dispatchWorkers[worker.worker_id] = worker;
+    const idx = allWorkers.findIndex(w => w.worker_id === worker.worker_id);
+    if (idx >= 0) allWorkers[idx] = worker;
+    else allWorkers.push(worker);
+    updateRosterCounts();
+    updateRosterState();
+    updateWidgets(); // refresh agent badges when worker state changes
+  });
+
+  es.addEventListener('worker_removed', (e) => {
+    const { data: { worker_id } } = JSON.parse(e.data);
+    delete dispatchWorkers[worker_id];
+    allWorkers = allWorkers.filter(w => w.worker_id !== worker_id);
+    updateRosterCounts();
+    updateRosterState();
+    updateWidgets(); // clear stale agent badges on node cards
+  });
+
+  es.addEventListener('journal_entry', (e) => {
+    const { data: { entry } } = JSON.parse(e.data);
+    journalEntries.unshift(entry);
+    if (journalEntries.length > 200) journalEntries.pop();
+    if (entry.action === 'escalate' && entry.job_key) escalatedJobs.add(entry.job_key);
+    refreshJournalPanel();
+  });
+
+  es.addEventListener('session_update', (e) => {
+    const { data: { session } } = JSON.parse(e.data);
+    const idx = allSessions.findIndex(s => s.job_key === session.job_key);
+    if (idx >= 0) allSessions[idx] = session;
+    else allSessions.push(session);
+    // Clear pending action if this update is for the worker we're waiting on.
+    if (pendingSessionAction && pendingSessionAction.workerId === session.worker_id) {
+      pendingSessionAction = null;
+    }
+    updateWidgets();
+    refreshSessionButtons();
+  });
+
+  es.addEventListener('session_removed', (e) => {
+    const { data: { job_key } } = JSON.parse(e.data);
+    allSessions = allSessions.filter(s => s.job_key !== job_key);
+    updateWidgets();
+    refreshSessionButtons();
+  });
+
+  es.onerror = () => {
+    // EventSource auto-reconnects. On reconnect, server sends fresh snapshot.
+    console.warn('SSE connection lost, will auto-reconnect');
+  };
+}
+
+// ── Init ──
+(function init() {
+  connectSSE();
+})();
+</script>
+</body>
+</html>

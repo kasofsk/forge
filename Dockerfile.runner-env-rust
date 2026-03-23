@@ -1,0 +1,14 @@
+# Runner environment with Rust toolchain for CI jobs.
+#
+# Used by act_runner containers when a workflow specifies `runs-on: rust`.
+# Extends the base runner-env with rustup, stable toolchain, and build deps.
+
+FROM workflow-runner-env:latest
+
+# Rust toolchain (as root — runner jobs run as root in act containers)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+    --default-toolchain stable --component clippy,rustfmt
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*

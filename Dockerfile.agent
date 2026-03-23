@@ -1,0 +1,70 @@
+# Dockerfile.agent — interactive Claude agent worker
+#
+# Extends the base worker with tmux, ttyd, Node.js, and the Claude Code CLI.
+# Each container exposes a fixed ttyd port so the browser terminal is reachable
+# from the host via a published port.
+
+FROM rust:latest AS chef
+RUN cargo install cargo-chef
+WORKDIR /build
+
+FROM chef AS planner
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
+COPY --from=planner /build/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json -p worker-cli
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+RUN cargo build --release -p worker-cli
+
+# ── runtime ───────────────────────────────────────────────────────────────────
+
+FROM debian:trixie-slim
+
+# Core utilities + tmux + bash (needed by claude installer) + jq (peek formatter)
+# nodejs + npm for jscpd (code duplication check plugin)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl git tmux bash jq nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# ttyd — grab the static Linux binary from GitHub releases
+RUN curl -fsSL \
+    "https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64" \
+    -o /usr/local/bin/ttyd \
+    && chmod +x /usr/local/bin/ttyd
+
+# Claude Code refuses --permission-mode bypassPermissions as root.
+RUN useradd -m -s /bin/bash agent
+
+# Git credential helper — authenticates git clone via FORGEJO_TOKEN env var
+COPY infra/agent/git-credential-forgejo.sh /usr/local/bin/git-credential-forgejo
+RUN chmod +x /usr/local/bin/git-credential-forgejo
+
+# Claude Code plugins — downloaded from GitHub marketplace repos at build time.
+# Configure which marketplaces and plugins to install in agent-plugins.conf.
+COPY agent-plugins.conf /tmp/agent-plugins.conf
+COPY infra/agent/download-plugins.sh /tmp/download-plugins.sh
+RUN sh /tmp/download-plugins.sh /tmp/agent-plugins.conf /opt/plugins
+
+# Claude Code CLI — native binary (installed as agent user)
+USER agent
+RUN curl -fsSL https://claude.ai/install.sh | bash
+ENV PATH="/home/agent/.local/bin:${PATH}"
+
+# Git defaults: credential helper + identity for commits
+RUN git config --global credential.helper /usr/local/bin/git-credential-forgejo \
+ && git config --global user.name "agent" \
+ && git config --global user.email "agent@forge.local"
+
+USER root
+COPY --from=builder /build/target/release/worker-cli /usr/local/bin/worker-cli
+USER agent
+
+# Skip Claude Code first-run onboarding (theme picker, etc.)
+ENV IS_DEMO=true
+WORKDIR /home/agent
+
+ENTRYPOINT ["worker-cli"]

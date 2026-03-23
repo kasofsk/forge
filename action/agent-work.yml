@@ -1,0 +1,183 @@
+# Forgejo Action: Claude Code agent work
+#
+# Triggered by the ActionWorker via workflow_dispatch. Fetches the assigned
+# issue, runs Claude Code to implement the work, and creates a PR.
+#
+# Push this file to .forgejo/workflows/agent-work.yml in the target repo
+# (or use the CLI's push-workflow command).
+#
+# Authentication — one of these must be set as a repo/org secret:
+#   ANTHROPIC_API_KEY         — direct API access
+#   CLAUDE_CODE_OAUTH_TOKEN   — Claude Max/Pro plan (from `claude /setup-token`)
+#
+# Runner labels: the ActionWorker passes `runner_label` to target a specific
+# self-hosted runner. Register runners with matching labels in Forgejo.
+
+name: Agent Work
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number to work on"
+        required: true
+      runner_label:
+        description: "Runner label for job routing"
+        required: false
+        default: "ubuntu-latest"
+      forgejo_url:
+        description: "Forgejo instance URL (for API calls)"
+        required: false
+      allowed_tools:
+        description: "Comma-separated list of tools Claude is allowed to use (e.g. 'Bash,Read,Write'). Empty = claude's defaults."
+        required: false
+        default: ""
+
+jobs:
+  work:
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 60
+
+    env:
+      ISSUE_NUMBER: ${{ inputs.issue_number }}
+      FORGEJO_URL: ${{ inputs.forgejo_url || github.server_url }}
+      REPO_OWNER: ${{ github.repository_owner }}
+      REPO_NAME: ${{ github.event.repository.name }}
+      ALLOWED_TOOLS: ${{ inputs.allowed_tools }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch issue content
+        id: issue
+        env:
+          FORGEJO_TOKEN: ${{ github.token }}
+        run: |
+          ISSUE_URL="${FORGEJO_URL}/api/v1/repos/${REPO_OWNER}/${REPO_NAME}/issues/${ISSUE_NUMBER}"
+          ISSUE_JSON=$(curl -sf \
+            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            "${ISSUE_URL}")
+
+          TITLE=$(echo "${ISSUE_JSON}" | jq -r '.title // ""')
+          BODY=$(echo "${ISSUE_JSON}" | jq -r '.body // ""')
+
+          echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
+
+          # Use a temp file for multi-line body
+          BODY_FILE=$(mktemp)
+          echo "${BODY}" > "${BODY_FILE}"
+          echo "body_file=${BODY_FILE}" >> "$GITHUB_OUTPUT"
+
+          # Also fetch comments for additional context
+          COMMENTS_URL="${FORGEJO_URL}/api/v1/repos/${REPO_OWNER}/${REPO_NAME}/issues/${ISSUE_NUMBER}/comments"
+          COMMENTS_JSON=$(curl -sf \
+            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            "${COMMENTS_URL}" || echo "[]")
+
+          COMMENTS_FILE=$(mktemp)
+          echo "${COMMENTS_JSON}" | jq -r '.[].body // empty' > "${COMMENTS_FILE}"
+          echo "comments_file=${COMMENTS_FILE}" >> "$GITHUB_OUTPUT"
+
+          echo "::notice::Working on issue #${ISSUE_NUMBER}: ${TITLE}"
+
+      - name: Install Claude Code
+        run: |
+          npm install -g @anthropic-ai/claude-code
+
+      - name: Run Claude Code
+        env:
+          # Auth — set exactly one of these as a repo secret:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ISSUE_TITLE: ${{ steps.issue.outputs.title }}
+        run: |
+          BODY=$(cat "${{ steps.issue.outputs.body_file }}")
+          COMMENTS=$(cat "${{ steps.issue.outputs.comments_file }}")
+
+          PROMPT="You are working on issue #${ISSUE_NUMBER} in this repository.
+
+          ## Issue: ${ISSUE_TITLE}
+
+          ${BODY}"
+
+          if [ -s "${{ steps.issue.outputs.comments_file }}" ]; then
+            PROMPT="${PROMPT}
+
+          ## Discussion
+
+          ${COMMENTS}"
+          fi
+
+          PROMPT="${PROMPT}
+
+          ## Instructions
+
+          1. Read the issue carefully and understand what needs to be done.
+          2. Explore the codebase to understand the relevant code.
+          3. Implement the requested changes.
+          4. Make sure your changes are correct and complete.
+          5. Do NOT create a PR or commit — just make the changes to the working tree."
+
+          TOOLS_FLAG=""
+          if [ -n "${ALLOWED_TOOLS}" ]; then
+            TOOLS_FLAG="--allowedTools ${ALLOWED_TOOLS}"
+          fi
+
+          claude ${TOOLS_FLAG} --print "${PROMPT}"
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Claude Code made no changes"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit and push changes
+        if: steps.changes.outputs.has_changes == 'true'
+        env:
+          FORGEJO_TOKEN: ${{ github.token }}
+          ISSUE_TITLE: ${{ steps.issue.outputs.title }}
+        run: |
+          git config user.name "claude-agent"
+          git config user.email "claude-agent@workflow.local"
+          git add -A
+          git commit -m "work: ${ISSUE_TITLE} (#${ISSUE_NUMBER})"
+          git push origin "${{ github.ref_name }}"
+
+      - name: Create pull request
+        if: steps.changes.outputs.has_changes == 'true'
+        env:
+          FORGEJO_TOKEN: ${{ github.token }}
+          ISSUE_TITLE: ${{ steps.issue.outputs.title }}
+        run: |
+          PR_BODY="Closes #${ISSUE_NUMBER}
+
+          Automated implementation by Claude Code agent."
+
+          # Check if a PR already exists for this branch
+          EXISTING=$(curl -sf \
+            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            "${FORGEJO_URL}/api/v1/repos/${REPO_OWNER}/${REPO_NAME}/pulls?state=open&head=${REPO_OWNER}:${{ github.ref_name }}" \
+            | jq 'length')
+
+          if [ "${EXISTING}" = "0" ]; then
+            curl -sf -X POST \
+              -H "Authorization: token ${FORGEJO_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n \
+                --arg title "${ISSUE_TITLE}" \
+                --arg body "${PR_BODY}" \
+                --arg head "${{ github.ref_name }}" \
+                --arg base "main" \
+                '{title: $title, body: $body, head: $head, base: $base}')" \
+              "${FORGEJO_URL}/api/v1/repos/${REPO_OWNER}/${REPO_NAME}/pulls"
+            echo "::notice::PR created for issue #${ISSUE_NUMBER}"
+          else
+            echo "::notice::PR already exists for this branch, pushed new changes"
+          fi

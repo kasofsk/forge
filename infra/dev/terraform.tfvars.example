@@ -1,0 +1,14 @@
+# Copy to terraform.tfvars and fill in values.
+# Never commit terraform.tfvars — it contains secrets.
+
+forgejo_url         = "http://localhost:3000"
+forgejo_admin_token = "YOUR_ADMIN_TOKEN_HERE"
+forgejo_insecure    = true   # set false when using a real TLS cert
+
+repo_owner   = "admin"       # or an org name you've created in Forgejo
+repo_name    = "workflow"
+email_domain = "example.com"
+
+# URL Forgejo uses internally to POST webhooks.
+# In docker-compose this is the sidecar's service name:
+sidecar_url = "http://sidecar:8080"

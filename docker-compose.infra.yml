@@ -1,0 +1,46 @@
+services:
+
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: forgejo
+      POSTGRES_USER: forgejo
+      POSTGRES_PASSWORD: forgejo
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forgejo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:14
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./.data/forgejo:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/api/v1/version"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  nats:
+    image: nats:latest
+    restart: unless-stopped
+    command: --jetstream --store_dir /data
+    volumes:
+      - nats-data:/data
+    ports:
+      - "4223:4222"
+
+volumes:
+  postgres-data:
+  nats-data:

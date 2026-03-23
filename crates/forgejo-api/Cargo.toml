@@ -1,0 +1,15 @@
+[package]
+name = "forgejo-api"
+version = "0.1.0"
+edition = "2021"
+description = "Generated Forgejo API client"
+
+[dependencies]
+serde = { workspace = true }
+serde_with = { version = "^3.8", default-features = false, features = ["base64", "std", "macros"] }
+serde_json = { workspace = true }
+serde_repr = "^0.1"
+url = "^2.5"
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+reqwest = { workspace = true, features = ["json", "multipart", "stream"] }

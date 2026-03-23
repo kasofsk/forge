@@ -1,0 +1,18 @@
+# act_runner configuration template.
+
+log:
+  level: info
+
+runner:
+  capacity: 1
+  timeout: 30m
+
+container:
+  # Job containers join the workflow network so they can reach forgejo:3000
+  network: "forge_default"
+  # Use locally available images only — don't pull from registries.
+  force_pull: false
+  privileged: false
+  options: "-v action-cache:/root/.cache/act"
+  valid_volumes:
+    - "action-cache"

@@ -1,0 +1,30 @@
+FROM rust:latest AS chef
+RUN cargo install cargo-chef
+RUN apt-get update && apt-get install -y --no-install-recommends clang libclang-dev librocksdb-dev && rm -rf /var/lib/apt/lists/*
+ENV ROCKSDB_LIB_DIR=/usr/lib
+ENV ROCKSDB_INCLUDE_DIR=/usr/include
+WORKDIR /build
+
+FROM chef AS planner
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
+COPY --from=planner /build/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json -p workflow-sidecar -p workflow-cdc -p workflow-reviewer
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+# Touch source files that use include_str! to force recompilation after cook.
+RUN touch crates/sidecar/src/main.rs
+RUN cargo build --release -p workflow-sidecar -p workflow-cdc -p workflow-reviewer
+
+# ── runtime ──────────────────────────────────────────────────────────────────
+
+FROM debian:trixie-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates librocksdb9.10 && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/target/release/workflow-sidecar /usr/local/bin/workflow-sidecar
+COPY --from=builder /build/target/release/workflow-cdc /usr/local/bin/workflow-cdc
+COPY --from=builder /build/target/release/workflow-reviewer /usr/local/bin/workflow-reviewer

@@ -1,0 +1,272 @@
+# Worker containers — start after init.sh has set up Forgejo + sidecar.
+#
+# Three modes:
+#   Sim workers:    ./scripts/workers.sh --sim        (sleep + yield)
+#   Action workers: ./scripts/workers.sh              (default, triggers Forgejo Actions)
+#   Agent workers:  ./scripts/workers.sh --agent      (interactive Claude sessions via ttyd)
+#
+# Agent workers expose fixed ttyd ports so the browser terminal is reachable
+# from the host: worker-aria=7681, worker-blake=7682, worker-casey=7683.
+
+services:
+
+  # ── Sim workers (default) ──────────────────────────────────────────────────
+
+  worker-aria:
+    image: workflow-worker:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    command:
+      - sim
+      - --nats-url=nats://nats:4222
+    environment:
+      WORKER_ID: worker-aria
+      FORGEJO_URL: http://forgejo:3000
+      FORGEJO_TOKEN: ${WORKER_ARIA_TOKEN:-}
+    depends_on: []
+    restart: unless-stopped
+    profiles: [sim]
+
+  worker-blake:
+    image: workflow-worker:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    command:
+      - sim
+      - --nats-url=nats://nats:4222
+    environment:
+      WORKER_ID: worker-blake
+      FORGEJO_URL: http://forgejo:3000
+      FORGEJO_TOKEN: ${WORKER_BLAKE_TOKEN:-}
+    depends_on: []
+    restart: unless-stopped
+    profiles: [sim]
+
+  worker-casey:
+    image: workflow-worker:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    command:
+      - sim
+      - --nats-url=nats://nats:4222
+    environment:
+      WORKER_ID: worker-casey
+      FORGEJO_URL: http://forgejo:3000
+      FORGEJO_TOKEN: ${WORKER_CASEY_TOKEN:-}
+    depends_on: []
+    restart: unless-stopped
+    profiles: [sim]
+
+  # ── Action workers + paired runners ────────────────────────────────────────
+  #
+  # Each action-X worker triggers Forgejo Actions workflows.
+  # Each runner-X container is a self-hosted act_runner that picks up those jobs.
+  # The runner label matches the worker name (e.g. worker-aria runs on runner-aria).
+
+  action-aria:
+    image: workflow-worker:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    command:
+      - action
+      - --nats-url=nats://nats:4222
+      - --runner=worker-aria
+      - --workflow=${ACTION_WORKFLOW:-sim-work.yml}
+    environment:
+      WORKER_ID: worker-aria
+      FORGEJO_URL: http://forgejo:3000
+      FORGEJO_TOKEN: ${WORKER_ARIA_TOKEN:-}
+    depends_on:
+      runner-aria:
+        condition: service_started
+    restart: unless-stopped
+    profiles: [action]
+
+  runner-aria:
+    image: gitea/act_runner:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - runner-aria-data:/data
+      - ./infra/runner/config.yaml:/config.yaml:ro
+    environment:
+      GITEA_INSTANCE_URL: http://forgejo:3000
+      GITEA_RUNNER_REGISTRATION_TOKEN: ${RUNNER_REGISTRATION_TOKEN}
+      GITEA_RUNNER_NAME: runner-aria
+      GITEA_RUNNER_LABELS: "worker-aria:docker://workflow-runner-env:latest,ubuntu-latest:docker://workflow-runner-env:latest"
+      CONFIG_FILE: /config.yaml
+    depends_on: []
+    restart: unless-stopped
+    profiles: [action]
+
+  action-blake:
+    image: workflow-worker:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    command:
+      - action
+      - --nats-url=nats://nats:4222
+      - --runner=worker-blake
+      - --workflow=${ACTION_WORKFLOW:-sim-work.yml}
+    environment:
+      WORKER_ID: worker-blake
+      FORGEJO_URL: http://forgejo:3000
+      FORGEJO_TOKEN: ${WORKER_BLAKE_TOKEN:-}
+    depends_on:
+      runner-blake:
+        condition: service_started
+    restart: unless-stopped
+    profiles: [action]
+
+  runner-blake:
+    image: gitea/act_runner:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - runner-blake-data:/data
+      - ./infra/runner/config.yaml:/config.yaml:ro
+    environment:
+      GITEA_INSTANCE_URL: http://forgejo:3000
+      GITEA_RUNNER_REGISTRATION_TOKEN: ${RUNNER_REGISTRATION_TOKEN}
+      GITEA_RUNNER_NAME: runner-blake
+      GITEA_RUNNER_LABELS: "worker-blake:docker://workflow-runner-env:latest,ubuntu-latest:docker://workflow-runner-env:latest"
+      CONFIG_FILE: /config.yaml
+    depends_on: []
+    restart: unless-stopped
+    profiles: [action]
+
+  action-casey:
+    image: workflow-worker:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    command:
+      - action
+      - --nats-url=nats://nats:4222
+      - --runner=worker-casey
+      - --workflow=${ACTION_WORKFLOW:-sim-work.yml}
+    environment:
+      WORKER_ID: worker-casey
+      FORGEJO_URL: http://forgejo:3000
+      FORGEJO_TOKEN: ${WORKER_CASEY_TOKEN:-}
+    depends_on:
+      runner-casey:
+        condition: service_started
+    restart: unless-stopped
+    profiles: [action]
+
+  runner-casey:
+    image: gitea/act_runner:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - runner-casey-data:/data
+      - ./infra/runner/config.yaml:/config.yaml:ro
+    environment:
+      GITEA_INSTANCE_URL: http://forgejo:3000
+      GITEA_RUNNER_REGISTRATION_TOKEN: ${RUNNER_REGISTRATION_TOKEN}
+      GITEA_RUNNER_NAME: runner-casey
+      GITEA_RUNNER_LABELS: "worker-casey:docker://workflow-runner-env:latest,ubuntu-latest:docker://workflow-runner-env:latest"
+      CONFIG_FILE: /config.yaml
+    depends_on: []
+    restart: unless-stopped
+    profiles: [action]
+
+  # ── Agent workers (interactive Claude sessions via ttyd) ───────────────────
+  #
+  # Each agent worker runs Claude Code inside a tmux session. A ttyd server
+  # serves the session over WebSockets so a human can observe (or attach) via
+  # browser. Fixed ports are published to the host:
+  #   worker-aria  → http://localhost:7681
+  #   worker-blake → http://localhost:7682
+  #   worker-casey → http://localhost:7683
+
+  agent-aria:
+    image: ${AGENT_IMAGE:-workflow-agent:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    command:
+      - agent
+      - --nats-url=nats://nats:4222
+    ports:
+      - "7681:7681"
+    environment:
+      WORKER_ID: worker-aria
+      FORGEJO_URL: http://forgejo:3000
+      FORGEJO_TOKEN: ${WORKER_ARIA_TOKEN:-}
+      NATS_URL: nats://nats:4222
+      AGENT_HOST: localhost
+      TTYD_PORT: "7681"
+      RUST_LOG: "worker_cli=info,workflow_worker=info"
+      AGENT_ALLOWED_TOOLS: ${AGENT_ALLOWED_TOOLS:-}
+      AGENT_CAPABILITY: ${AGENT_CAPABILITY:-}
+      AGENT_PLUGIN_DIRS: ${AGENT_PLUGIN_DIRS:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+    restart: unless-stopped
+    profiles: [agent]
+
+  agent-blake:
+    image: ${AGENT_IMAGE:-workflow-agent:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    command:
+      - agent
+      - --nats-url=nats://nats:4222
+    ports:
+      - "7682:7682"
+    environment:
+      WORKER_ID: worker-blake
+      FORGEJO_URL: http://forgejo:3000
+      FORGEJO_TOKEN: ${WORKER_BLAKE_TOKEN:-}
+      NATS_URL: nats://nats:4222
+      AGENT_HOST: localhost
+      TTYD_PORT: "7682"
+      AGENT_ALLOWED_TOOLS: ${AGENT_ALLOWED_TOOLS:-}
+      AGENT_CAPABILITY: ${AGENT_CAPABILITY:-}
+      AGENT_PLUGIN_DIRS: ${AGENT_PLUGIN_DIRS:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+    restart: unless-stopped
+    profiles: [agent]
+
+  agent-casey:
+    image: ${AGENT_IMAGE:-workflow-agent:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    command:
+      - agent
+      - --nats-url=nats://nats:4222
+    ports:
+      - "7683:7683"
+    environment:
+      WORKER_ID: worker-casey
+      FORGEJO_URL: http://forgejo:3000
+      FORGEJO_TOKEN: ${WORKER_CASEY_TOKEN:-}
+      NATS_URL: nats://nats:4222
+      AGENT_HOST: localhost
+      TTYD_PORT: "7683"
+      AGENT_ALLOWED_TOOLS: ${AGENT_ALLOWED_TOOLS:-}
+      AGENT_CAPABILITY: ${AGENT_CAPABILITY:-}
+      AGENT_PLUGIN_DIRS: ${AGENT_PLUGIN_DIRS:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+    restart: unless-stopped
+    profiles: [agent]
+
+networks:
+  default:
+    name: forge_default
+    external: true
+
+volumes:
+  runner-aria-data:
+  runner-blake-data:
+  runner-casey-data:
+  action-cache:
+

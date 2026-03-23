@@ -1,0 +1,25 @@
+FROM rust:latest AS chef
+RUN cargo install cargo-chef
+WORKDIR /build
+
+FROM chef AS planner
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
+COPY --from=planner /build/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json -p worker-cli
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+RUN cargo build --release -p worker-cli
+
+# ── runtime ──────────────────────────────────────────────────────────────────
+
+FROM debian:trixie-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/target/release/worker-cli /usr/local/bin/worker-cli
+
+ENTRYPOINT ["worker-cli"]
