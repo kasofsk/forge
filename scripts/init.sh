@@ -58,6 +58,25 @@ done
 
 cd "$ROOT"
 
+# ── 0. Verify Claude credentials ────────────────────────────────────────────
+#
+# Action workers and the reviewer invoke Claude via Forgejo Actions workflows.
+# The credentials are stored as repo secrets during Terraform apply.  Without
+# them, agent-work.yml and review-work.yml will fail at runtime.
+
+if [[ -z "${FORGE_CLAUDE_CODE_OAUTH_TOKEN:-}" && -z "${ANTHROPIC_API_KEY:-}" ]]; then
+    echo "❌ Claude Code credentials not found."
+    echo ""
+    echo "  Set one of these environment variables before running init.sh:"
+    echo ""
+    echo "    export FORGE_CLAUDE_CODE_OAUTH_TOKEN=...   # OAuth token (preferred)"
+    echo "    export ANTHROPIC_API_KEY=...               # API key"
+    echo ""
+    echo "  These are stored as Forgejo repo secrets so action workers and the"
+    echo "  reviewer can invoke Claude during job execution and PR review."
+    exit 1
+fi
+
 # ── 1. Tear down everything ─────────────────────────────────────────────────
 
 echo "🗑  Tearing down containers and clearing state ..."
@@ -125,10 +144,12 @@ rm -rf .terraform terraform.tfstate terraform.tfstate.backup
 terraform init -input=false -upgrade >/dev/null
 
 echo "🏗  Applying Terraform ..."
-# Build repo_secrets map from env vars (if set).
+# Build repo_secrets map from env vars.
 REPO_SECRETS="{}"
 if [[ -n "${FORGE_CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
   REPO_SECRETS="{\"CLAUDE_CODE_OAUTH_TOKEN\"=\"${FORGE_CLAUDE_CODE_OAUTH_TOKEN}\"}"
+elif [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+  REPO_SECRETS="{\"ANTHROPIC_API_KEY\"=\"${ANTHROPIC_API_KEY}\"}"
 fi
 
 TF_VAR_forgejo_admin_token="$ADMIN_TOKEN" \

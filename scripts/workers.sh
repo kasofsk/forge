@@ -106,7 +106,15 @@ set -a; source .workers.env; set +a
 
 if [[ "$MODE" == "agent" ]]; then
     if [[ -z "${ANTHROPIC_API_KEY:-}" && -z "${FORGE_CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
-        echo "❌ Set ANTHROPIC_API_KEY or FORGE_CLAUDE_CODE_OAUTH_TOKEN before starting agent workers."
+        echo "❌ Claude Code credentials not found."
+        echo ""
+        echo "  Set one of these environment variables before starting agent workers:"
+        echo ""
+        echo "    export FORGE_CLAUDE_CODE_OAUTH_TOKEN=...   # OAuth token (preferred)"
+        echo "    export ANTHROPIC_API_KEY=...               # API key"
+        echo ""
+        echo "  Agent workers run Claude Code inside containers and need one of"
+        echo "  these to authenticate with the Anthropic API."
         exit 1
     fi
 fi

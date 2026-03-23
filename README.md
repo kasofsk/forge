@@ -47,6 +47,16 @@ Jobs start on-ice or blocked (if they have dependencies). When deps resolve, the
 
 ## Quick start
 
+**Prerequisites:** Set a Claude Code credential so workers and the reviewer can invoke Claude:
+
+```bash
+export FORGE_CLAUDE_CODE_OAUTH_TOKEN=...   # OAuth token (preferred)
+# or
+export ANTHROPIC_API_KEY=...               # API key
+```
+
+Then run:
+
 ```bash
 ./scripts/init.sh          # full setup: infra, build, seed
 ./scripts/workers.sh       # start action workers + runners
